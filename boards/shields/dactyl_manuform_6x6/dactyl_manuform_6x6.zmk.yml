@@ -1,0 +1,15 @@
+file_format: "1"
+id: dactyl_manuform_6x6
+name: Dactyl Manuform 6x6
+type: shield
+url: https://github.com/gczgcz2015/zmk-config
+requires:
+  - pro_micro
+features:
+  - keys
+outputs:
+  - usb
+  - ble
+siblings:
+  - dactyl_manuform_6x6_left
+  - dactyl_manuform_6x6_right
