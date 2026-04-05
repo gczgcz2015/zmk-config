@@ -1,0 +1,4 @@
+include:
+  - board: nice_nano
+    shield: settings_reset
+    artifact-name: adafruit-nice-nano-settings-reset
