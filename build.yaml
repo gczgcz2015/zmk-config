@@ -1,6 +1,8 @@
 include:
   - board: nice_nano
     shield: dactyl_manuform_6x6_left
+    snippet: studio-rpc-usb-uart
+    cmake-args: -DCONFIG_ZMK_STUDIO=y -DCONFIG_ZMK_STUDIO_LOCKING=n
     artifact-name: dactyl-manuform-6x6-left
   - board: nice_nano
     shield: dactyl_manuform_6x6_right
