@@ -1,6 +1,6 @@
 # ZMK config starter
 
-This repository is a ZMK config repo for an Adafruit `nice!nano` compatible
+This repository is a ZMK config repo for a Pro Micro form factor nRF52840
 split keyboard.
 
 It currently builds:
@@ -10,8 +10,8 @@ It currently builds:
 
 ## Current Dactyl assumptions
 
-The custom shield uses the upstream `nice_nano` board plus a local split shield
-named `dactyl_manuform_6x6`.
+The custom shield uses the upstream `promicro_nrf52840` board target plus a
+local split shield named `dactyl_manuform_6x6`.
 
 - diode direction: `col2row`
 - left/right column pins: `D2 D3 D4 D5 D6 D7`
