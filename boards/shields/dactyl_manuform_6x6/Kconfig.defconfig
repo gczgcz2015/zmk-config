@@ -1,7 +1,7 @@
 if SHIELD_DACTYL_MANUFORM_6X6_LEFT
 
 config ZMK_KEYBOARD_NAME
-    default "DM6x6"
+    default "paul-dactyl"
 
 config ZMK_SPLIT_ROLE_CENTRAL
     default y

@@ -1,6 +1,6 @@
 file_format: "1"
 id: dactyl_manuform_6x6
-name: Dactyl Manuform 6x6
+name: paul-dactyl
 type: shield
 url: https://github.com/gczgcz2015/zmk-config
 requires:
