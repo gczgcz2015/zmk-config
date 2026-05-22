@@ -33,7 +33,9 @@ definitions in the shield overlay files.
 The dongle build follows the Prospector ZMK module setup. The XIAO dongle is
 the split central and uses the `prospector_adapter` shield for the 1.69-inch
 ST7789 display. Ambient light sensing is disabled by default, so the screen can
-be wired without the optional APDS9960 sensor.
+be wired without the optional APDS9960 sensor. The default Prospector layer
+roller is reduced and moved to the top-left corner, with a small LVGL cat face
+drawn in the center of the display.
 
 To use dongle mode, flash:
 
