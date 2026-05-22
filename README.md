@@ -5,8 +5,10 @@ split keyboard compatible with the upstream `nice_nano_v2` board definition.
 
 It currently builds:
 
-- a real `dactyl_manuform_6x6_left` firmware target for the left half
+- a normal `dactyl_manuform_6x6_left` central firmware target for the left half
+- a dongle-mode `dactyl_manuform_6x6_left_peripheral` firmware target for the left half
 - a real `dactyl_manuform_6x6_right` firmware target for the right half
+- a Prospector-compatible `dactyl_manuform_6x6_dongle` target for a Seeed Studio XIAO nRF52840
 - a safe `settings_reset` firmware image for clearing persistent settings
 
 ## Current Dactyl assumptions
@@ -25,6 +27,23 @@ six rows and seven columns.
 
 If your actual matrix wiring differs, update the `row-gpios` and `col-gpios`
 definitions in the shield overlay files.
+
+## Dongle mode
+
+The dongle build follows the Prospector ZMK module setup. The XIAO dongle is
+the split central and uses the `prospector_adapter` shield for the 1.69-inch
+ST7789 display. Ambient light sensing is disabled by default, so the screen can
+be wired without the optional APDS9960 sensor.
+
+To use dongle mode, flash:
+
+- `dactyl-manuform-6x6-prospector-dongle.uf2` to the XIAO nRF52840 dongle
+- `dactyl-manuform-6x6-left-peripheral.uf2` to the left half
+- `dactyl-manuform-6x6-right.uf2` to the right half
+
+Pair the left half to the dongle first, then the right half. To return to the
+original no-dongle setup, flash `dactyl-manuform-6x6-left.uf2` back to the left
+half and pair the host with the left half again.
 
 ## Wiring
 
