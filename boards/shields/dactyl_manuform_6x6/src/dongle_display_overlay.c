@@ -121,9 +121,7 @@ static void display_overlay_work_handler(struct k_work *work) {
     lv_async_call(install_display_overlay, NULL);
 }
 
-static int display_overlay_init(const struct device *dev) {
-    ARG_UNUSED(dev);
-
+static int display_overlay_init(void) {
     k_work_init_delayable(&display_overlay_work, display_overlay_work_handler);
     k_work_schedule(&display_overlay_work, K_SECONDS(2));
 
