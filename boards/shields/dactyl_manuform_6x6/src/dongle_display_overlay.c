@@ -8,7 +8,6 @@
 
 #include "bongo_cat_art.h"
 
-#define BONGO_CAT_ZOOM 768
 #define BONGO_REST_DELAY_MS 160
 
 enum bongo_cat_frame {
@@ -82,9 +81,7 @@ static void create_bongo_cat(lv_obj_t *screen) {
 
     bongo_cat_img = lv_img_create(cat);
     lv_img_set_src(bongo_cat_img, &bongo_resting);
-    lv_img_set_zoom(bongo_cat_img, BONGO_CAT_ZOOM);
-    lv_img_set_antialias(bongo_cat_img, false);
-    lv_obj_align(bongo_cat_img, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_center(bongo_cat_img);
 }
 
 static void install_display_overlay(void *unused) {
