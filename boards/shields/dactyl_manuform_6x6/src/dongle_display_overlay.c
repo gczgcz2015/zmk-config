@@ -1,6 +1,5 @@
 #include <lvgl.h>
 #include <stdint.h>
-#include <string.h>
 #include <zephyr/init.h>
 #include <zephyr/kernel.h>
 #include <zephyr/sys/util.h>
@@ -57,24 +56,6 @@ static void schedule_bongo_frame(enum bongo_cat_frame frame, k_timeout_t delay) 
     k_work_reschedule(&bongo_frame_work, delay);
 }
 
-static void hide_unavailable_battery_labels(lv_obj_t *obj) {
-    if (obj == NULL) {
-        return;
-    }
-
-    if (lv_obj_check_type(obj, &lv_label_class)) {
-        const char *text = lv_label_get_text(obj);
-        if (text != NULL && strcmp(text, "N/A") == 0) {
-            lv_obj_set_style_opa(obj, LV_OPA_TRANSP, LV_PART_MAIN);
-        }
-    }
-
-    uint32_t child_count = lv_obj_get_child_cnt(obj);
-    for (uint32_t i = 0; i < child_count; i++) {
-        hide_unavailable_battery_labels(lv_obj_get_child(obj, i));
-    }
-}
-
 static void shrink_layer_roller(lv_obj_t *screen) {
     uint32_t child_count = lv_obj_get_child_cnt(screen);
 
@@ -87,6 +68,15 @@ static void shrink_layer_roller(lv_obj_t *screen) {
     lv_obj_align(layer_roller, LV_ALIGN_TOP_LEFT, 10, 10);
     lv_obj_set_style_text_font(layer_roller, LV_FONT_DEFAULT, LV_PART_MAIN);
     lv_obj_set_style_text_font(layer_roller, LV_FONT_DEFAULT, LV_PART_SELECTED);
+}
+
+static void move_caps_word_indicator(lv_obj_t *screen) {
+    if (lv_obj_get_child_cnt(screen) < 1) {
+        return;
+    }
+
+    lv_obj_t *caps_word_indicator = lv_obj_get_child(screen, 0);
+    lv_obj_align(caps_word_indicator, LV_ALIGN_TOP_LEFT, 16, 88);
 }
 
 static void create_bongo_cat(lv_obj_t *screen) {
@@ -117,7 +107,7 @@ static void install_display_overlay(void *unused) {
     }
 
     shrink_layer_roller(screen);
-    hide_unavailable_battery_labels(screen);
+    move_caps_word_indicator(screen);
     create_bongo_cat(screen);
     display_overlay_installed = true;
 }
