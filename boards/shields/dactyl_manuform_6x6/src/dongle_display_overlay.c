@@ -31,23 +31,23 @@ enum bongo_cat_frame {
 
 /*
  * Cat and flame placement within the 204x128 cat container.
- * The cat is kept to the right of the status column so its black image
- * background does not cover the layer and caps indicators.
+ * Status indicators are moved to foreground so the cat's dark image
+ * background does not cover them regardless of overlap.
  */
 #define CAT_CONTAINER_W     204
 #define CAT_CONTAINER_H     128
-#define CAT_X_OFFSET        12
+#define CAT_X_OFFSET        6
 #define CAT_Y_OFFSET        10
-#define CAT_CONTAINER_X     34
+#define CAT_CONTAINER_X     0
 #define CAT_CONTAINER_Y     6
 #define PAW_EXT_POINT_COUNT 2
-#define PAW_EXT_X0          36
+#define PAW_EXT_X0          30
 #define PAW_EXT_Y0          78
-#define PAW_EXT_X1          48
+#define PAW_EXT_X1          42
 #define PAW_EXT_Y1          78
 #define PAW_EXT_LEFT_Y      91
 #define PAW_EXT_RIGHT_Y     78
-#define FLAME_BASE_X        126   /* Head center X in container coords    */
+#define FLAME_BASE_X        120   /* Head center X in container coords    */
 #define FLAME_BASE_Y        44    /* Flame base Y in container coords     */
 
 typedef enum {
@@ -368,7 +368,7 @@ static void move_caps_word_indicator(lv_obj_t *screen) {
 
     caps_word_indicator_obj = lv_obj_get_child(screen, 0);
     lv_obj_clear_flag(caps_word_indicator_obj, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_align(caps_word_indicator_obj, LV_ALIGN_BOTTOM_LEFT, 8, -8);
+    lv_obj_align(caps_word_indicator_obj, LV_ALIGN_TOP_LEFT, 20, 82);
 }
 
 static void create_bongo_cat(lv_obj_t *screen) {
