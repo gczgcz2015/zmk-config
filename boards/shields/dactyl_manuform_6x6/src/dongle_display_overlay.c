@@ -25,8 +25,8 @@ enum bongo_cat_frame {
 
 /* ──────────────────────── Flame Particle System ──────────────────────── */
 
-#define MAX_FLAME_PARTICLES 12
-#define FLAME_TICK_MS       100   /* ~10 FPS flame animation              */
+#define MAX_FLAME_PARTICLES 16
+#define FLAME_TICK_MS       80    /* ~12 FPS flame animation              */
 #define FLAME_FP_SHIFT      4     /* 1/16 px fixed-point particle motion  */
 #define FLAME_FP_ONE        (1 << FLAME_FP_SHIFT)
 
@@ -41,10 +41,10 @@ enum bongo_cat_frame {
 #define FLAME_SPREAD_X      14    /* Horizontal spawn spread              */
 
 typedef enum {
-    FLAME_NONE,      /* < 2 KPS   */
-    FLAME_SMALL,     /* 2-4 KPS   */
-    FLAME_MEDIUM,    /* 4-7 KPS   */
-    FLAME_LARGE,     /* >= 7 KPS  */
+    FLAME_NONE,      /* < 0.8 KPS */
+    FLAME_SMALL,     /* 0.8-2.8 KPS */
+    FLAME_MEDIUM,    /* 2.8-5 KPS */
+    FLAME_LARGE,     /* >= 5 KPS  */
 } flame_level_t;
 
 typedef struct {
@@ -53,7 +53,8 @@ typedef struct {
     int16_t   life;
     int16_t   max_life;
     int16_t   vx_fp, vy_fp;
-    int8_t    size;
+    int8_t    width;
+    int8_t    height;
 } flame_particle_t;
 
 /* ──────────────────────── Static Variables ──────────────────────── */
@@ -170,9 +171,9 @@ static int calc_kps_x10(void) {
 
 static flame_level_t get_flame_level(void) {
     int kps = calc_kps_x10();
-    if (kps >= 70) return FLAME_LARGE;   /* >= 7.0 KPS (~84 WPM) */
-    if (kps >= 40) return FLAME_MEDIUM;  /* >= 4.0 KPS (~48 WPM) */
-    if (kps >= 20) return FLAME_SMALL;   /* >= 2.0 KPS (~24 WPM) */
+    if (kps >= 50) return FLAME_LARGE;   /* >= 5.0 KPS (~60 WPM) */
+    if (kps >= 28) return FLAME_MEDIUM;  /* >= 2.8 KPS (~34 WPM) */
+    if (kps >= 8) return FLAME_SMALL;    /* >= 0.8 KPS (~10 WPM) */
     return FLAME_NONE;
 }
 
@@ -202,19 +203,39 @@ static int16_t clamp_i16(int16_t value, int16_t min, int16_t max) {
     return value;
 }
 
-static void spawn_particle(flame_particle_t *p) {
+static void spawn_particle(flame_particle_t *p, flame_level_t level) {
     uint32_t r = flame_rand();
+    int16_t spread = FLAME_SPREAD_X;
+    int16_t level_boost = 0;
+
+    switch (level) {
+    case FLAME_LARGE:
+        spread += 4;
+        level_boost = 5;
+        break;
+    case FLAME_MEDIUM:
+        spread += 2;
+        level_boost = 3;
+        break;
+    case FLAME_SMALL:
+        level_boost = 1;
+        break;
+    default:
+        break;
+    }
+
     int16_t spawn_x = FLAME_BASE_X
-                      + (int16_t)(r % (FLAME_SPREAD_X * 2 + 1)) - FLAME_SPREAD_X;
+                      + (int16_t)(r % (spread * 2 + 1)) - spread;
     int16_t spawn_y = FLAME_BASE_Y + (int16_t)(flame_rand() % 5);
 
     p->x_fp     = spawn_x * FLAME_FP_ONE;
     p->y_fp     = spawn_y * FLAME_FP_ONE;
-    p->life     = 7 + (int16_t)(flame_rand() % 8);      /* 7 - 14 ticks  */
+    p->life     = 8 + level_boost + (int16_t)(flame_rand() % 8);
     p->max_life = p->life;
-    p->vx_fp    = (int16_t)(flame_rand() % 19) - 9;      /* -0.56..0.56px */
-    p->vy_fp    = FLAME_FP_ONE + (int16_t)(flame_rand() % 25);
-    p->size     = 4 + (int8_t)(flame_rand() % 4);        /* 4 - 7 px      */
+    p->vx_fp    = (int16_t)(flame_rand() % 17) - 8;      /* -0.50..0.50px */
+    p->vy_fp    = FLAME_FP_ONE + 4 + level_boost + (int16_t)(flame_rand() % 18);
+    p->width    = 3 + (int8_t)(flame_rand() % 4);        /* 3 - 6 px      */
+    p->height   = 8 + level_boost + (int8_t)(flame_rand() % 7);
 
     /* Lazy-create the LVGL object on first use */
     if (p->obj == NULL) {
@@ -222,16 +243,16 @@ static void spawn_particle(flame_particle_t *p) {
         lv_obj_clear_flag(p->obj,
                           LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_style_border_width(p->obj, 0, LV_PART_MAIN);
-        lv_obj_set_style_radius(p->obj, 2, LV_PART_MAIN);
+        lv_obj_set_style_radius(p->obj, 3, LV_PART_MAIN);
         lv_obj_set_style_pad_all(p->obj, 0, LV_PART_MAIN);
     }
 
     /* Set initial appearance immediately to avoid a flash of default style */
-    lv_obj_set_style_bg_color(p->obj, lv_color_make(255, 220, 180), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(p->obj, lv_color_make(255, 82, 0), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(p->obj, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_size(p->obj, p->size, p->size);
+    lv_obj_set_size(p->obj, p->width, p->height);
     lv_obj_clear_flag(p->obj, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_pos(p->obj, spawn_x - p->size / 2, spawn_y - p->size / 2);
+    lv_obj_set_pos(p->obj, spawn_x - p->width / 2, spawn_y - p->height / 2);
 }
 
 static void update_particle(flame_particle_t *p) {
@@ -264,16 +285,21 @@ static void update_particle(flame_particle_t *p) {
     uint8_t cg;
     uint8_t cb;
 
-    if (ratio > 65) {
-        int t = (100 - ratio) * 100 / 35;
+    if (ratio > 80) {
+        int t = (100 - ratio) * 100 / 20;
         cr = flame_lerp_u8(255, 255, t);
-        cg = flame_lerp_u8(235, 120, t);
-        cb = flame_lerp_u8(180, 0, t);
-    } else {
-        int t = (65 - ratio) * 100 / 65;
-        cr = flame_lerp_u8(255, 180, t);
-        cg = flame_lerp_u8(120, 20, t);
+        cg = flame_lerp_u8(245, 80, t);
+        cb = flame_lerp_u8(120, 0, t);
+    } else if (ratio > 35) {
+        int t = (80 - ratio) * 100 / 45;
+        cr = flame_lerp_u8(255, 225, t);
+        cg = flame_lerp_u8(80, 12, t);
         cb = 0;
+    } else {
+        int t = (35 - ratio) * 100 / 35;
+        cr = flame_lerp_u8(225, 120, t);
+        cg = flame_lerp_u8(12, 0, t);
+        cb = flame_lerp_u8(0, 18, t);
     }
 
     lv_obj_set_style_bg_color(p->obj, lv_color_make(cr, cg, cb), LV_PART_MAIN);
@@ -283,14 +309,18 @@ static void update_particle(flame_particle_t *p) {
                               ratio * (LV_OPA_COVER - LV_OPA_40) / 100);
     lv_obj_set_style_bg_opa(p->obj, opa, LV_PART_MAIN);
 
-    /* Shrink as the particle cools */
-    int new_size = 2 + (p->size - 2) * ratio / 100;
-    if (new_size < 2) {
-        new_size = 2;
+    /* Taper while rising: wide base, smaller tip, taller than it is wide. */
+    int new_width = 1 + (p->width - 1) * ratio / 100;
+    int new_height = 3 + (p->height - 3) * ratio / 100;
+    if (new_width < 1) {
+        new_width = 1;
     }
-    lv_obj_set_size(p->obj, new_size, new_size);
-    lv_obj_set_pos(p->obj, (p->x_fp / FLAME_FP_ONE) - new_size / 2,
-                   (p->y_fp / FLAME_FP_ONE) - new_size / 2);
+    if (new_height < 3) {
+        new_height = 3;
+    }
+    lv_obj_set_size(p->obj, new_width, new_height);
+    lv_obj_set_pos(p->obj, (p->x_fp / FLAME_FP_ONE) - new_width / 2,
+                   (p->y_fp / FLAME_FP_ONE) - new_height / 2);
 }
 
 static void flame_tick_callback(void *unused) {
@@ -305,9 +335,9 @@ static void flame_tick_callback(void *unused) {
     /* Target particle count per flame level */
     int target;
     switch (level) {
-    case FLAME_LARGE:  target = 12; break;
-    case FLAME_MEDIUM: target = 7;  break;
-    case FLAME_SMALL:  target = 3;  break;
+    case FLAME_LARGE:  target = 16; break;
+    case FLAME_MEDIUM: target = 10; break;
+    case FLAME_SMALL:  target = 5;  break;
     default:           target = 0;  break;
     }
 
@@ -322,14 +352,21 @@ static void flame_tick_callback(void *unused) {
         }
     }
 
-    /* Spawn new particles (max 2 per tick to ramp up smoothly) */
+    /* Spawn new particles; faster typing ramps the flame up harder. */
     int to_spawn = target - alive;
-    if (to_spawn > 2) {
-        to_spawn = 2;
+    int max_spawn;
+    switch (level) {
+    case FLAME_LARGE:  max_spawn = 4; break;
+    case FLAME_MEDIUM: max_spawn = 3; break;
+    case FLAME_SMALL:  max_spawn = 2; break;
+    default:           max_spawn = 0; break;
+    }
+    if (to_spawn > max_spawn) {
+        to_spawn = max_spawn;
     }
     for (int i = 0; i < MAX_FLAME_PARTICLES && to_spawn > 0; i++) {
         if (flame_particles[i].life <= 0) {
-            spawn_particle(&flame_particles[i]);
+            spawn_particle(&flame_particles[i], level);
             to_spawn--;
         }
     }
