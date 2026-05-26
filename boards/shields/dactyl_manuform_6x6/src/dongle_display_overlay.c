@@ -28,23 +28,23 @@ enum bongo_cat_frame {
 
 #define FIRE_FRAME_COUNT    8
 #define FIRE_TICK_MS        80    /* ~12 FPS fire animation               */
-#define FIRE_IMG_W          48
-#define FIRE_IMG_H          36
-#define FIRE_ZOOM_SMALL     171   /* 32 / 48 * 256                        */
-#define FIRE_ZOOM_MEDIUM    213   /* 40 / 48 * 256                        */
-#define FIRE_ZOOM_LARGE     256   /* 48 / 48 * 256                        */
+#define FIRE_IMG_W          72
+#define FIRE_IMG_H          52
+#define FIRE_ZOOM_SMALL     178   /* 50 / 72 * 256                        */
+#define FIRE_ZOOM_MEDIUM    220   /* 62 / 72 * 256                        */
+#define FIRE_ZOOM_LARGE     256   /* 72 / 72 * 256                        */
 
 /*
- * Cat and fire placement within the 224x128 cat container.
+ * Cat and fire placement within the 200x128 cat container.
  * The bongo cat image is shifted down/right to keep the left paw clear of
  * the status UI while leaving black space above the head for the fire sprite.
  */
-#define CAT_CONTAINER_W     224
+#define CAT_CONTAINER_W     200
 #define CAT_CONTAINER_H     128
-#define CAT_X_OFFSET        10
-#define CAT_Y_OFFSET        18
-#define FIRE_BASE_X         134   /* Head center X in container coords    */
-#define FIRE_BASE_Y         12    /* Fire top Y in container coords       */
+#define CAT_X_OFFSET        8
+#define CAT_Y_OFFSET        10
+#define FIRE_BASE_X         122   /* Head center X in container coords    */
+#define FIRE_BASE_Y         4     /* Fire top Y in container coords       */
 
 typedef enum {
     FLAME_NONE,      /* < 0.8 KPS */
@@ -249,7 +249,7 @@ static void flame_tick_callback(void *unused) {
     int draw_w = (FIRE_IMG_W * zoom + 128) / 256;
     int jitter_x = (int)(flame_rand() % 3) - 1;
     int jitter_y = (int)(flame_rand() % 2);
-    int level_y = level == FLAME_SMALL ? 8 : level == FLAME_MEDIUM ? 4 : 0;
+    int level_y = level == FLAME_SMALL ? 12 : level == FLAME_MEDIUM ? 6 : 0;
 
     lv_img_set_src(fire_img, fire_frames[fire_frame]);
     lv_img_set_zoom(fire_img, zoom);
@@ -292,27 +292,27 @@ static void move_caps_word_indicator(lv_obj_t *screen) {
     }
 
     lv_obj_t *caps_word_indicator = lv_obj_get_child(screen, 0);
-    lv_obj_align(caps_word_indicator, LV_ALIGN_BOTTOM_LEFT, 8, -8);
+    lv_obj_add_flag(caps_word_indicator, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void create_bongo_cat(lv_obj_t *screen) {
     cat_container = lv_obj_create(screen);
     lv_obj_set_size(cat_container, CAT_CONTAINER_W, CAT_CONTAINER_H);
-    lv_obj_align(cat_container, LV_ALIGN_CENTER, 12, 14);
+    lv_obj_align(cat_container, LV_ALIGN_CENTER, 32, 0);
     lv_obj_set_style_bg_opa(cat_container, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_width(cat_container, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(cat_container, 0, LV_PART_MAIN);
     lv_obj_clear_flag(cat_container, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+
+    bongo_cat_img = lv_img_create(cat_container);
+    lv_img_set_src(bongo_cat_img, &bongo_resting);
+    lv_obj_align(bongo_cat_img, LV_ALIGN_CENTER, CAT_X_OFFSET, CAT_Y_OFFSET);
 
     fire_img = lv_img_create(cat_container);
     lv_img_set_src(fire_img, &bongo_fire_0);
     lv_img_set_zoom(fire_img, FIRE_ZOOM_LARGE);
     lv_obj_set_pos(fire_img, FIRE_BASE_X - FIRE_IMG_W / 2, FIRE_BASE_Y);
     lv_obj_add_flag(fire_img, LV_OBJ_FLAG_HIDDEN);
-
-    bongo_cat_img = lv_img_create(cat_container);
-    lv_img_set_src(bongo_cat_img, &bongo_resting);
-    lv_obj_align(bongo_cat_img, LV_ALIGN_CENTER, CAT_X_OFFSET, CAT_Y_OFFSET);
 
     lv_obj_move_foreground(cat_container);
 }
