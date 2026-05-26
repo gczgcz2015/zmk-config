@@ -7,7 +7,6 @@
 #include <zmk/events/position_state_changed.h>
 
 #include "bongo_cat_art.h"
-#include "bongo_fire_art.h"
 
 /* ──────────────────────── Bongo Cat Settings ──────────────────────── */
 
@@ -24,27 +23,25 @@ enum bongo_cat_frame {
 #define SPEED_RING_SIZE     16    /* Track last 16 keystrokes             */
 #define FLAME_DECAY_MS      2000  /* Flame dies 2 s after last keystroke  */
 
-/* ──────────────────────── Fire Sprite Animation ──────────────────────── */
+/* ──────────────────────── Flame Line Animation ──────────────────────── */
 
-#define FIRE_FRAME_COUNT    8
-#define FIRE_TICK_MS        80    /* ~12 FPS fire animation               */
-#define FIRE_IMG_W          72
-#define FIRE_IMG_H          52
-#define FIRE_ZOOM_SMALL     178   /* 50 / 72 * 256                        */
-#define FIRE_ZOOM_MEDIUM    220   /* 62 / 72 * 256                        */
-#define FIRE_ZOOM_LARGE     256   /* 72 / 72 * 256                        */
+#define FLAME_TICK_MS       80    /* ~12 FPS flame animation              */
+#define FLAME_STROKE_COUNT  7
+#define FLAME_POINT_COUNT   4
 
 /*
- * Cat and fire placement within the 200x128 cat container.
+ * Cat and flame placement within the 220x128 cat container.
  * The bongo cat image is shifted down/right to keep the left paw clear of
- * the status UI while leaving black space above the head for the fire sprite.
+ * the status UI while leaving black space above the head for flame strokes.
  */
-#define CAT_CONTAINER_W     200
+#define CAT_CONTAINER_W     220
 #define CAT_CONTAINER_H     128
-#define CAT_X_OFFSET        8
+#define CAT_X_OFFSET        10
 #define CAT_Y_OFFSET        10
-#define FIRE_BASE_X         122   /* Head center X in container coords    */
-#define FIRE_BASE_Y         4     /* Fire top Y in container coords       */
+#define CAT_CONTAINER_X     28
+#define CAT_CONTAINER_Y     4
+#define FLAME_BASE_X        132   /* Head center X in container coords    */
+#define FLAME_BASE_Y        44    /* Flame base Y in container coords     */
 
 typedef enum {
     FLAME_NONE,      /* < 0.8 KPS */
@@ -60,7 +57,7 @@ static struct k_work_delayable bongo_frame_work;
 static struct k_work_delayable display_overlay_work;
 static lv_obj_t *bongo_cat_img;
 static lv_obj_t *cat_container;
-static lv_obj_t *fire_img;
+static lv_obj_t *layer_roller_obj;
 static bool display_overlay_installed;
 static enum bongo_cat_frame pending_bongo_frame = BONGO_CAT_RESTING;
 static uint8_t active_key_count;
@@ -72,13 +69,16 @@ static uint8_t speed_ring_head;
 static uint8_t speed_ring_count;
 static struct k_spinlock speed_lock;
 
-/* Fire sprite */
+typedef struct {
+    lv_obj_t *obj;
+    lv_point_t points[FLAME_POINT_COUNT];
+} flame_stroke_t;
+
+/* Flame strokes */
 static struct k_work_delayable flame_tick_work;
 static bool flame_tick_running;
-static bool fire_visible;
 static uint32_t flame_rng_state = 0xDEADBEEF;
-static uint8_t fire_frame;
-static uint8_t fire_tick_divider;
+static flame_stroke_t flame_strokes[FLAME_STROKE_COUNT];
 
 /* ══════════════════════════════════════════════════════════════════ */
 /*                       Bongo Cat Animation                        */
@@ -177,19 +177,8 @@ static flame_level_t get_flame_level(void) {
 }
 
 /* ══════════════════════════════════════════════════════════════════ */
-/*                  Fire Sprite Animation                           */
+/*                  Flame Line Animation                            */
 /* ══════════════════════════════════════════════════════════════════ */
-
-static const lv_img_dsc_t *fire_frames[FIRE_FRAME_COUNT] = {
-    &bongo_fire_0,
-    &bongo_fire_1,
-    &bongo_fire_2,
-    &bongo_fire_3,
-    &bongo_fire_4,
-    &bongo_fire_5,
-    &bongo_fire_6,
-    &bongo_fire_7,
-};
 
 /* Simple xorshift32 PRNG */
 static uint32_t flame_rand(void) {
@@ -199,73 +188,131 @@ static uint32_t flame_rand(void) {
     return flame_rng_state;
 }
 
-static uint16_t fire_zoom_for_level(flame_level_t level) {
-    switch (level) {
-    case FLAME_LARGE:
-        return FIRE_ZOOM_LARGE;
-    case FLAME_MEDIUM:
-        return FIRE_ZOOM_MEDIUM;
-    case FLAME_SMALL:
-        return FIRE_ZOOM_SMALL;
-    default:
-        return FIRE_ZOOM_SMALL;
+static void hide_flame_strokes(void) {
+    for (int i = 0; i < FLAME_STROKE_COUNT; i++) {
+        if (flame_strokes[i].obj != NULL) {
+            lv_obj_add_flag(flame_strokes[i].obj, LV_OBJ_FLAG_HIDDEN);
+        }
     }
 }
 
-static bool should_advance_fire_frame(flame_level_t level) {
-    if (level == FLAME_SMALL) {
-        fire_tick_divider++;
-        return (fire_tick_divider % 2) == 0;
+static int flame_height_for_level(flame_level_t level) {
+    switch (level) {
+    case FLAME_LARGE:
+        return 34;
+    case FLAME_MEDIUM:
+        return 26;
+    case FLAME_SMALL:
+        return 18;
+    default:
+        return 0;
+    }
+}
+
+static int flame_active_strokes_for_level(flame_level_t level) {
+    switch (level) {
+    case FLAME_LARGE:
+        return FLAME_STROKE_COUNT;
+    case FLAME_MEDIUM:
+        return 5;
+    case FLAME_SMALL:
+        return 3;
+    default:
+        return 0;
+    }
+}
+
+static lv_color_t flame_color_for_index(int index) {
+    switch (index) {
+    case 0:
+    case 4:
+        return lv_color_make(190, 20, 0);
+    case 1:
+    case 3:
+        return lv_color_make(235, 52, 0);
+    case 2:
+        return lv_color_make(255, 104, 0);
+    case 5:
+        return lv_color_make(255, 170, 20);
+    case 6:
+    default:
+        return lv_color_make(255, 230, 70);
+    }
+}
+
+static void set_flame_stroke(int index, int x_offset, int height, int width,
+                             lv_color_t color, lv_opa_t opa) {
+    flame_stroke_t *stroke = &flame_strokes[index];
+
+    if (stroke->obj == NULL) {
+        return;
     }
 
-    return true;
+    int sway_a = (int)(flame_rand() % 9) - 4;
+    int sway_b = (int)(flame_rand() % 13) - 6;
+    int tip_jitter = (int)(flame_rand() % 7) - 3;
+    int base_x = FLAME_BASE_X + x_offset;
+    int base_y = FLAME_BASE_Y + (int)(flame_rand() % 3);
+
+    stroke->points[0].x = base_x;
+    stroke->points[0].y = base_y;
+    stroke->points[1].x = base_x + sway_a;
+    stroke->points[1].y = base_y - height / 3;
+    stroke->points[2].x = base_x + sway_b;
+    stroke->points[2].y = base_y - (height * 2) / 3;
+    stroke->points[3].x = base_x + tip_jitter;
+    stroke->points[3].y = base_y - height;
+
+    lv_line_set_points(stroke->obj, stroke->points, FLAME_POINT_COUNT);
+    lv_obj_set_style_line_color(stroke->obj, color, LV_PART_MAIN);
+    lv_obj_set_style_line_width(stroke->obj, width, LV_PART_MAIN);
+    lv_obj_set_style_line_opa(stroke->obj, opa, LV_PART_MAIN);
+    lv_obj_set_style_line_rounded(stroke->obj, true, LV_PART_MAIN);
+    lv_obj_clear_flag(stroke->obj, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void flame_tick_callback(void *unused) {
     ARG_UNUSED(unused);
 
-    if (cat_container == NULL || fire_img == NULL) {
+    if (cat_container == NULL) {
         return;
     }
 
     flame_level_t level = get_flame_level();
+    int active_strokes = flame_active_strokes_for_level(level);
 
-    if (level == FLAME_NONE) {
-        lv_obj_add_flag(fire_img, LV_OBJ_FLAG_HIDDEN);
-        fire_visible = false;
+    if (active_strokes == 0) {
+        hide_flame_strokes();
         flame_tick_running = false;
         k_work_cancel_delayable(&flame_tick_work);
         return;
     }
 
-    if (!fire_visible) {
-        fire_frame = flame_rand() % FIRE_FRAME_COUNT;
-        fire_tick_divider = 0;
-        fire_visible = true;
-        lv_obj_clear_flag(fire_img, LV_OBJ_FLAG_HIDDEN);
-    }
+    int height = flame_height_for_level(level);
+    int width_boost = level == FLAME_LARGE ? 2 : level == FLAME_MEDIUM ? 1 : 0;
 
-    uint16_t zoom = fire_zoom_for_level(level);
-    int draw_w = (FIRE_IMG_W * zoom + 128) / 256;
-    int jitter_x = (int)(flame_rand() % 3) - 1;
-    int jitter_y = (int)(flame_rand() % 2);
-    int level_y = level == FLAME_SMALL ? 12 : level == FLAME_MEDIUM ? 6 : 0;
+    static const int8_t offsets[FLAME_STROKE_COUNT] = {-16, -9, -3, 5, 12, 0, 2};
+    static const uint8_t height_scale[FLAME_STROKE_COUNT] = {70, 86, 100, 78, 66, 58, 42};
+    static const uint8_t width_base[FLAME_STROKE_COUNT] = {4, 5, 6, 5, 4, 3, 2};
 
-    lv_img_set_src(fire_img, fire_frames[fire_frame]);
-    lv_img_set_zoom(fire_img, zoom);
-    lv_obj_set_pos(fire_img, FIRE_BASE_X - draw_w / 2 + jitter_x,
-                   FIRE_BASE_Y + level_y + jitter_y);
+    for (int i = 0; i < FLAME_STROKE_COUNT; i++) {
+        if (i >= active_strokes) {
+            lv_obj_add_flag(flame_strokes[i].obj, LV_OBJ_FLAG_HIDDEN);
+            continue;
+        }
 
-    if (should_advance_fire_frame(level) && (flame_rand() % 5) != 0) {
-        uint8_t step = (level == FLAME_LARGE && (flame_rand() % 4) == 0) ? 2 : 1;
-        fire_frame = (fire_frame + step) % FIRE_FRAME_COUNT;
+        int stroke_height = (height * height_scale[i]) / 100 + (int)(flame_rand() % 5);
+        int stroke_width = width_base[i] + width_boost;
+        lv_opa_t opa = i >= 5 ? LV_OPA_90 : LV_OPA_COVER;
+        set_flame_stroke(i, offsets[i], stroke_height, stroke_width,
+                          flame_color_for_index(i), opa);
     }
 }
 
 static void flame_tick_work_handler(struct k_work *work) {
     ARG_UNUSED(work);
     lv_async_call(flame_tick_callback, NULL);
-    k_work_reschedule(&flame_tick_work, K_MSEC(FIRE_TICK_MS));
+    k_work_reschedule(&flame_tick_work, K_MSEC(FLAME_TICK_MS));
 }
 
 /* ══════════════════════════════════════════════════════════════════ */
@@ -279,11 +326,11 @@ static void shrink_layer_roller(lv_obj_t *screen) {
         return;
     }
 
-    lv_obj_t *layer_roller = lv_obj_get_child(screen, child_count - 1);
-    lv_obj_set_size(layer_roller, 96, 52);
-    lv_obj_align(layer_roller, LV_ALIGN_TOP_LEFT, 6, 6);
-    lv_obj_set_style_text_font(layer_roller, LV_FONT_DEFAULT, LV_PART_MAIN);
-    lv_obj_set_style_text_font(layer_roller, LV_FONT_DEFAULT, LV_PART_SELECTED);
+    layer_roller_obj = lv_obj_get_child(screen, child_count - 1);
+    lv_obj_set_size(layer_roller_obj, 104, 58);
+    lv_obj_align(layer_roller_obj, LV_ALIGN_TOP_LEFT, 8, 18);
+    lv_obj_set_style_text_font(layer_roller_obj, LV_FONT_DEFAULT, LV_PART_MAIN);
+    lv_obj_set_style_text_font(layer_roller_obj, LV_FONT_DEFAULT, LV_PART_SELECTED);
 }
 
 static void move_caps_word_indicator(lv_obj_t *screen) {
@@ -298,7 +345,7 @@ static void move_caps_word_indicator(lv_obj_t *screen) {
 static void create_bongo_cat(lv_obj_t *screen) {
     cat_container = lv_obj_create(screen);
     lv_obj_set_size(cat_container, CAT_CONTAINER_W, CAT_CONTAINER_H);
-    lv_obj_align(cat_container, LV_ALIGN_CENTER, 32, 0);
+    lv_obj_align(cat_container, LV_ALIGN_CENTER, CAT_CONTAINER_X, CAT_CONTAINER_Y);
     lv_obj_set_style_bg_opa(cat_container, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_width(cat_container, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(cat_container, 0, LV_PART_MAIN);
@@ -308,13 +355,17 @@ static void create_bongo_cat(lv_obj_t *screen) {
     lv_img_set_src(bongo_cat_img, &bongo_resting);
     lv_obj_align(bongo_cat_img, LV_ALIGN_CENTER, CAT_X_OFFSET, CAT_Y_OFFSET);
 
-    fire_img = lv_img_create(cat_container);
-    lv_img_set_src(fire_img, &bongo_fire_0);
-    lv_img_set_zoom(fire_img, FIRE_ZOOM_LARGE);
-    lv_obj_set_pos(fire_img, FIRE_BASE_X - FIRE_IMG_W / 2, FIRE_BASE_Y);
-    lv_obj_add_flag(fire_img, LV_OBJ_FLAG_HIDDEN);
+    for (int i = 0; i < FLAME_STROKE_COUNT; i++) {
+        flame_strokes[i].obj = lv_line_create(cat_container);
+        lv_obj_clear_flag(flame_strokes[i].obj,
+                          LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_flag(flame_strokes[i].obj, LV_OBJ_FLAG_HIDDEN);
+    }
 
     lv_obj_move_foreground(cat_container);
+    if (layer_roller_obj != NULL) {
+        lv_obj_move_foreground(layer_roller_obj);
+    }
 }
 
 static void install_display_overlay(void *unused) {
