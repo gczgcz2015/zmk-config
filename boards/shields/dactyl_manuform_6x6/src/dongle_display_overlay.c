@@ -30,17 +30,24 @@ enum bongo_cat_frame {
 #define FLAME_POINT_COUNT   4
 
 /*
- * Cat and flame placement within the 220x128 cat container.
- * The bongo cat image is shifted down/right to keep the left paw clear of
- * the status UI while leaving black space above the head for flame strokes.
+ * Cat and flame placement within the 204x128 cat container.
+ * The cat is kept to the right of the status column so its black image
+ * background does not cover the layer and caps indicators.
  */
-#define CAT_CONTAINER_W     220
+#define CAT_CONTAINER_W     204
 #define CAT_CONTAINER_H     128
-#define CAT_X_OFFSET        10
+#define CAT_X_OFFSET        12
 #define CAT_Y_OFFSET        10
-#define CAT_CONTAINER_X     28
-#define CAT_CONTAINER_Y     4
-#define FLAME_BASE_X        132   /* Head center X in container coords    */
+#define CAT_CONTAINER_X     34
+#define CAT_CONTAINER_Y     6
+#define PAW_EXT_POINT_COUNT 2
+#define PAW_EXT_X0          36
+#define PAW_EXT_Y0          78
+#define PAW_EXT_X1          48
+#define PAW_EXT_Y1          78
+#define PAW_EXT_LEFT_Y      91
+#define PAW_EXT_RIGHT_Y     78
+#define FLAME_BASE_X        126   /* Head center X in container coords    */
 #define FLAME_BASE_Y        44    /* Flame base Y in container coords     */
 
 typedef enum {
@@ -58,6 +65,8 @@ static struct k_work_delayable display_overlay_work;
 static lv_obj_t *bongo_cat_img;
 static lv_obj_t *cat_container;
 static lv_obj_t *layer_roller_obj;
+static lv_obj_t *caps_word_indicator_obj;
+static lv_obj_t *paw_extension_line;
 static bool display_overlay_installed;
 static enum bongo_cat_frame pending_bongo_frame = BONGO_CAT_RESTING;
 static uint8_t active_key_count;
@@ -79,6 +88,7 @@ static struct k_work_delayable flame_tick_work;
 static bool flame_tick_running;
 static uint32_t flame_rng_state = 0xDEADBEEF;
 static flame_stroke_t flame_strokes[FLAME_STROKE_COUNT];
+static lv_point_t paw_extension_points[PAW_EXT_POINT_COUNT];
 
 /* ══════════════════════════════════════════════════════════════════ */
 /*                       Bongo Cat Animation                        */
@@ -104,6 +114,24 @@ static void apply_bongo_frame(void *unused) {
     }
 
     lv_img_set_src(bongo_cat_img, bongo_frame_image(pending_bongo_frame));
+
+    if (paw_extension_line != NULL) {
+        if (pending_bongo_frame == BONGO_CAT_LEFT ||
+            pending_bongo_frame == BONGO_CAT_RIGHT) {
+            int y = pending_bongo_frame == BONGO_CAT_LEFT ? PAW_EXT_LEFT_Y
+                                                          : PAW_EXT_RIGHT_Y;
+
+            paw_extension_points[0].x = PAW_EXT_X0;
+            paw_extension_points[0].y = y;
+            paw_extension_points[1].x = PAW_EXT_X1;
+            paw_extension_points[1].y = y;
+            lv_line_set_points(paw_extension_line, paw_extension_points,
+                               PAW_EXT_POINT_COUNT);
+            lv_obj_clear_flag(paw_extension_line, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(paw_extension_line, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
 }
 
 static void bongo_frame_work_handler(struct k_work *work) {
@@ -338,8 +366,9 @@ static void move_caps_word_indicator(lv_obj_t *screen) {
         return;
     }
 
-    lv_obj_t *caps_word_indicator = lv_obj_get_child(screen, 0);
-    lv_obj_add_flag(caps_word_indicator, LV_OBJ_FLAG_HIDDEN);
+    caps_word_indicator_obj = lv_obj_get_child(screen, 0);
+    lv_obj_clear_flag(caps_word_indicator_obj, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_align(caps_word_indicator_obj, LV_ALIGN_BOTTOM_LEFT, 8, -8);
 }
 
 static void create_bongo_cat(lv_obj_t *screen) {
@@ -355,6 +384,20 @@ static void create_bongo_cat(lv_obj_t *screen) {
     lv_img_set_src(bongo_cat_img, &bongo_resting);
     lv_obj_align(bongo_cat_img, LV_ALIGN_CENTER, CAT_X_OFFSET, CAT_Y_OFFSET);
 
+    paw_extension_points[0].x = PAW_EXT_X0;
+    paw_extension_points[0].y = PAW_EXT_Y0;
+    paw_extension_points[1].x = PAW_EXT_X1;
+    paw_extension_points[1].y = PAW_EXT_Y1;
+    paw_extension_line = lv_line_create(cat_container);
+    lv_line_set_points(paw_extension_line, paw_extension_points, PAW_EXT_POINT_COUNT);
+    lv_obj_set_style_line_color(paw_extension_line, lv_color_make(255, 255, 255),
+                                LV_PART_MAIN);
+    lv_obj_set_style_line_width(paw_extension_line, 4, LV_PART_MAIN);
+    lv_obj_set_style_line_rounded(paw_extension_line, true, LV_PART_MAIN);
+    lv_obj_clear_flag(paw_extension_line,
+                      LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(paw_extension_line, LV_OBJ_FLAG_HIDDEN);
+
     for (int i = 0; i < FLAME_STROKE_COUNT; i++) {
         flame_strokes[i].obj = lv_line_create(cat_container);
         lv_obj_clear_flag(flame_strokes[i].obj,
@@ -365,6 +408,9 @@ static void create_bongo_cat(lv_obj_t *screen) {
     lv_obj_move_foreground(cat_container);
     if (layer_roller_obj != NULL) {
         lv_obj_move_foreground(layer_roller_obj);
+    }
+    if (caps_word_indicator_obj != NULL) {
+        lv_obj_move_foreground(caps_word_indicator_obj);
     }
 }
 
