@@ -7,6 +7,7 @@
 #include <zmk/events/position_state_changed.h>
 
 #include "bongo_cat_art.h"
+#include "bongo_fire_art.h"
 
 /* ──────────────────────── Bongo Cat Settings ──────────────────────── */
 
@@ -23,22 +24,27 @@ enum bongo_cat_frame {
 #define SPEED_RING_SIZE     16    /* Track last 16 keystrokes             */
 #define FLAME_DECAY_MS      2000  /* Flame dies 2 s after last keystroke  */
 
-/* ──────────────────────── Flame Particle System ──────────────────────── */
+/* ──────────────────────── Fire Sprite Animation ──────────────────────── */
 
-#define MAX_FLAME_PARTICLES 18
-#define FLAME_TICK_MS       80    /* ~12 FPS flame animation              */
-#define FLAME_FP_SHIFT      4     /* 1/16 px fixed-point particle motion  */
-#define FLAME_FP_ONE        (1 << FLAME_FP_SHIFT)
+#define FIRE_FRAME_COUNT    8
+#define FIRE_TICK_MS        80    /* ~12 FPS fire animation               */
+#define FIRE_IMG_W          48
+#define FIRE_IMG_H          36
+#define FIRE_ZOOM_SMALL     171   /* 32 / 48 * 256                        */
+#define FIRE_ZOOM_MEDIUM    213   /* 40 / 48 * 256                        */
+#define FIRE_ZOOM_LARGE     256   /* 48 / 48 * 256                        */
 
 /*
- * Cat head position within the 204x120 cat container.
- * The bongo cat image is 152x78, centered in the container.
- * Image origin = ((204-152)/2, (120-78)/2) = (26, 21).
- * Head center is roughly at (26+90, 21+12) = (116, 33).
+ * Cat and fire placement within the 224x128 cat container.
+ * The bongo cat image is shifted down/right to keep the left paw clear of
+ * the status UI while leaving black space above the head for the fire sprite.
  */
-#define FLAME_BASE_X        116   /* Head center X in container coords    */
-#define FLAME_BASE_Y        30    /* Head top Y in container coords       */
-#define FLAME_SPREAD_X      14    /* Horizontal spawn spread              */
+#define CAT_CONTAINER_W     224
+#define CAT_CONTAINER_H     128
+#define CAT_X_OFFSET        10
+#define CAT_Y_OFFSET        18
+#define FIRE_BASE_X         134   /* Head center X in container coords    */
+#define FIRE_BASE_Y         12    /* Fire top Y in container coords       */
 
 typedef enum {
     FLAME_NONE,      /* < 0.8 KPS */
@@ -47,17 +53,6 @@ typedef enum {
     FLAME_LARGE,     /* >= 5 KPS  */
 } flame_level_t;
 
-typedef struct {
-    lv_obj_t *obj;
-    int16_t   x_fp, y_fp;
-    int16_t   life;
-    int16_t   max_life;
-    int16_t   vx_fp, vy_fp;
-    int8_t    width;
-    int8_t    height;
-    uint8_t   heat;
-} flame_particle_t;
-
 /* ──────────────────────── Static Variables ──────────────────────── */
 
 /* Bongo cat */
@@ -65,6 +60,7 @@ static struct k_work_delayable bongo_frame_work;
 static struct k_work_delayable display_overlay_work;
 static lv_obj_t *bongo_cat_img;
 static lv_obj_t *cat_container;
+static lv_obj_t *fire_img;
 static bool display_overlay_installed;
 static enum bongo_cat_frame pending_bongo_frame = BONGO_CAT_RESTING;
 static uint8_t active_key_count;
@@ -76,11 +72,13 @@ static uint8_t speed_ring_head;
 static uint8_t speed_ring_count;
 static struct k_spinlock speed_lock;
 
-/* Flame particles */
-static flame_particle_t flame_particles[MAX_FLAME_PARTICLES];
+/* Fire sprite */
 static struct k_work_delayable flame_tick_work;
 static bool flame_tick_running;
+static bool fire_visible;
 static uint32_t flame_rng_state = 0xDEADBEEF;
+static uint8_t fire_frame;
+static uint8_t fire_tick_divider;
 
 /* ══════════════════════════════════════════════════════════════════ */
 /*                       Bongo Cat Animation                        */
@@ -179,8 +177,19 @@ static flame_level_t get_flame_level(void) {
 }
 
 /* ══════════════════════════════════════════════════════════════════ */
-/*             Flame Particle System  (Balatro-style)               */
+/*                  Fire Sprite Animation                           */
 /* ══════════════════════════════════════════════════════════════════ */
+
+static const lv_img_dsc_t *fire_frames[FIRE_FRAME_COUNT] = {
+    &bongo_fire_0,
+    &bongo_fire_1,
+    &bongo_fire_2,
+    &bongo_fire_3,
+    &bongo_fire_4,
+    &bongo_fire_5,
+    &bongo_fire_6,
+    &bongo_fire_7,
+};
 
 /* Simple xorshift32 PRNG */
 static uint32_t flame_rand(void) {
@@ -190,226 +199,73 @@ static uint32_t flame_rand(void) {
     return flame_rng_state;
 }
 
-static int16_t clamp_i16(int16_t value, int16_t min, int16_t max) {
-    if (value < min) {
-        return min;
-    }
-    if (value > max) {
-        return max;
-    }
-    return value;
-}
-
-static int snap_px(int value) {
-    return value & ~1;
-}
-
-static void spawn_particle(flame_particle_t *p, flame_level_t level) {
-    uint32_t r = flame_rand();
-    int16_t spread = FLAME_SPREAD_X;
-    int16_t level_boost = 0;
-
+static uint16_t fire_zoom_for_level(flame_level_t level) {
     switch (level) {
     case FLAME_LARGE:
-        spread += 4;
-        level_boost = 5;
-        break;
+        return FIRE_ZOOM_LARGE;
     case FLAME_MEDIUM:
-        spread += 2;
-        level_boost = 3;
-        break;
+        return FIRE_ZOOM_MEDIUM;
     case FLAME_SMALL:
-        level_boost = 1;
-        break;
+        return FIRE_ZOOM_SMALL;
     default:
-        break;
+        return FIRE_ZOOM_SMALL;
     }
-
-    int16_t spawn_x = FLAME_BASE_X
-                      + (int16_t)(r % (spread * 2 + 1)) - spread;
-    int16_t spawn_y = FLAME_BASE_Y + 4 + (int16_t)(flame_rand() % 6);
-    int16_t center_dist = spawn_x > FLAME_BASE_X ? spawn_x - FLAME_BASE_X
-                                                 : FLAME_BASE_X - spawn_x;
-
-    p->x_fp     = spawn_x * FLAME_FP_ONE;
-    p->y_fp     = spawn_y * FLAME_FP_ONE;
-    p->life     = 7 + level_boost + (int16_t)(flame_rand() % 7);
-    p->max_life = p->life;
-    p->vx_fp    = (int16_t)(flame_rand() % 21) - 10;     /* -0.63..0.63px */
-    p->vy_fp    = FLAME_FP_ONE + 6 + level_boost + (int16_t)(flame_rand() % 21);
-    p->width    = 4 + (int8_t)((flame_rand() % 3) * 2);  /* 4, 6, 8 px    */
-    p->height   = 4 + level_boost + (int8_t)((flame_rand() % 4) * 2);
-
-    if (center_dist <= spread / 3 && (flame_rand() % 3) == 0) {
-        p->heat = 2; /* yellow core */
-    } else if ((flame_rand() % 4) != 0) {
-        p->heat = 1; /* orange body */
-    } else {
-        p->heat = 0; /* red edge */
-    }
-
-    /* Lazy-create the LVGL object on first use */
-    if (p->obj == NULL) {
-        p->obj = lv_obj_create(cat_container);
-        lv_obj_clear_flag(p->obj,
-                          LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_set_style_border_width(p->obj, 0, LV_PART_MAIN);
-        lv_obj_set_style_radius(p->obj, 0, LV_PART_MAIN);
-        lv_obj_set_style_pad_all(p->obj, 0, LV_PART_MAIN);
-    }
-
-    /* Set initial appearance immediately to avoid a flash of default style */
-    lv_obj_set_style_bg_color(p->obj, lv_color_make(244, 58, 0), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(p->obj, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_size(p->obj, p->width, p->height);
-    lv_obj_clear_flag(p->obj, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_pos(p->obj, snap_px(spawn_x - p->width / 2),
-                   snap_px(spawn_y - p->height / 2));
 }
 
-static void update_particle(flame_particle_t *p) {
-    if (p->life <= 0 || p->obj == NULL) {
-        if (p->obj != NULL) {
-            lv_obj_add_flag(p->obj, LV_OBJ_FLAG_HIDDEN);
-        }
-        return;
+static bool should_advance_fire_frame(flame_level_t level) {
+    if (level == FLAME_SMALL) {
+        fire_tick_divider++;
+        return (fire_tick_divider % 2) == 0;
     }
 
-    /* Physics: rise upward with sub-pixel drift and small turbulence. */
-    p->y_fp -= p->vy_fp;
-    p->x_fp += p->vx_fp;
-    if (flame_rand() % 3 == 0) {
-        p->vx_fp += (int16_t)(flame_rand() % 7) - 3;
-        p->vx_fp = clamp_i16(p->vx_fp, -14, 14);
-    }
-    if (flame_rand() % 5 == 0) {
-        p->vy_fp += (int16_t)(flame_rand() % 5) - 2;
-        p->vy_fp = clamp_i16(p->vy_fp, FLAME_FP_ONE - 2, FLAME_FP_ONE * 3);
-    }
-    p->life--;
-
-    /* Blocky Balatro-style palette: red/orange body, yellow only in the core. */
-    int ratio = (p->life * 100) / p->max_life;
-    lv_color_t color;
-
-    if (ratio > 72) {
-        if (p->heat >= 2) {
-            color = lv_color_make(255, 232, 68);
-        } else if (p->heat == 1) {
-            color = lv_color_make(255, 112, 0);
-        } else {
-            color = lv_color_make(224, 36, 0);
-        }
-    } else if (ratio > 38) {
-        if (p->heat >= 2) {
-            color = lv_color_make(255, 132, 0);
-        } else if (p->heat == 1) {
-            color = lv_color_make(236, 58, 0);
-        } else {
-            color = lv_color_make(156, 16, 6);
-        }
-    } else {
-        if (p->heat >= 2) {
-            color = lv_color_make(190, 44, 0);
-        } else if (p->heat == 1) {
-            color = lv_color_make(130, 14, 12);
-        } else {
-            color = lv_color_make(72, 0, 18);
-        }
-    }
-
-    lv_obj_set_style_bg_color(p->obj, color, LV_PART_MAIN);
-
-    /* Opacity fades with life */
-    lv_opa_t opa = (lv_opa_t)(LV_OPA_40 +
-                              ratio * (LV_OPA_COVER - LV_OPA_40) / 100);
-    lv_obj_set_style_bg_opa(p->obj, opa, LV_PART_MAIN);
-
-    /* Keep the blocks chunky, then snap them to a 2 px grid. */
-    int new_width = 2 + (p->width - 2) * ratio / 100;
-    int new_height = 2 + (p->height - 2) * ratio / 100;
-    if (new_width < 2) {
-        new_width = 2;
-    }
-    if (new_height < 2) {
-        new_height = 2;
-    }
-    new_width = snap_px(new_width);
-    new_height = snap_px(new_height);
-
-    lv_obj_set_size(p->obj, new_width, new_height);
-    lv_obj_set_pos(p->obj, snap_px((p->x_fp / FLAME_FP_ONE) - new_width / 2),
-                   snap_px((p->y_fp / FLAME_FP_ONE) - new_height / 2));
+    return true;
 }
 
 static void flame_tick_callback(void *unused) {
     ARG_UNUSED(unused);
 
-    if (cat_container == NULL) {
+    if (cat_container == NULL || fire_img == NULL) {
         return;
     }
 
     flame_level_t level = get_flame_level();
 
-    /* Target particle count per flame level */
-    int target;
-    switch (level) {
-    case FLAME_LARGE:  target = 18; break;
-    case FLAME_MEDIUM: target = 11; break;
-    case FLAME_SMALL:  target = 5;  break;
-    default:           target = 0;  break;
-    }
-
-    /* Update existing particles */
-    int alive = 0;
-    for (int i = 0; i < MAX_FLAME_PARTICLES; i++) {
-        if (flame_particles[i].life > 0) {
-            update_particle(&flame_particles[i]);
-            if (flame_particles[i].life > 0) {
-                alive++;
-            }
-        }
-    }
-
-    /* Spawn new particles; faster typing ramps the flame up harder. */
-    int to_spawn = target - alive;
-    int max_spawn;
-    switch (level) {
-    case FLAME_LARGE:  max_spawn = 4; break;
-    case FLAME_MEDIUM: max_spawn = 3; break;
-    case FLAME_SMALL:  max_spawn = 2; break;
-    default:           max_spawn = 0; break;
-    }
-    if (to_spawn > max_spawn) {
-        to_spawn = max_spawn;
-    }
-    for (int i = 0; i < MAX_FLAME_PARTICLES && to_spawn > 0; i++) {
-        if (flame_particles[i].life <= 0) {
-            spawn_particle(&flame_particles[i], level);
-            to_spawn--;
-        }
-    }
-
-    /* Make sure dead particles stay hidden */
-    for (int i = 0; i < MAX_FLAME_PARTICLES; i++) {
-        if (flame_particles[i].life <= 0 && flame_particles[i].obj != NULL) {
-            lv_obj_add_flag(flame_particles[i].obj, LV_OBJ_FLAG_HIDDEN);
-        }
-    }
-
-    /* Self-stop: if no flame is needed and all particles are dead,
-     * cancel the next scheduled tick.  The keystroke listener will
-     * restart us when typing resumes. */
-    if (level == FLAME_NONE && alive == 0 && to_spawn <= 0) {
+    if (level == FLAME_NONE) {
+        lv_obj_add_flag(fire_img, LV_OBJ_FLAG_HIDDEN);
+        fire_visible = false;
         flame_tick_running = false;
         k_work_cancel_delayable(&flame_tick_work);
+        return;
+    }
+
+    if (!fire_visible) {
+        fire_frame = flame_rand() % FIRE_FRAME_COUNT;
+        fire_tick_divider = 0;
+        fire_visible = true;
+        lv_obj_clear_flag(fire_img, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    uint16_t zoom = fire_zoom_for_level(level);
+    int draw_w = (FIRE_IMG_W * zoom + 128) / 256;
+    int jitter_x = (int)(flame_rand() % 3) - 1;
+    int jitter_y = (int)(flame_rand() % 2);
+    int level_y = level == FLAME_SMALL ? 8 : level == FLAME_MEDIUM ? 4 : 0;
+
+    lv_img_set_src(fire_img, fire_frames[fire_frame]);
+    lv_img_set_zoom(fire_img, zoom);
+    lv_obj_set_pos(fire_img, FIRE_BASE_X - draw_w / 2 + jitter_x,
+                   FIRE_BASE_Y + level_y + jitter_y);
+
+    if (should_advance_fire_frame(level) && (flame_rand() % 5) != 0) {
+        uint8_t step = (level == FLAME_LARGE && (flame_rand() % 4) == 0) ? 2 : 1;
+        fire_frame = (fire_frame + step) % FIRE_FRAME_COUNT;
     }
 }
 
 static void flame_tick_work_handler(struct k_work *work) {
     ARG_UNUSED(work);
     lv_async_call(flame_tick_callback, NULL);
-    k_work_reschedule(&flame_tick_work, K_MSEC(FLAME_TICK_MS));
+    k_work_reschedule(&flame_tick_work, K_MSEC(FIRE_TICK_MS));
 }
 
 /* ══════════════════════════════════════════════════════════════════ */
@@ -424,8 +280,8 @@ static void shrink_layer_roller(lv_obj_t *screen) {
     }
 
     lv_obj_t *layer_roller = lv_obj_get_child(screen, child_count - 1);
-    lv_obj_set_size(layer_roller, 112, 64);
-    lv_obj_align(layer_roller, LV_ALIGN_TOP_LEFT, 10, 10);
+    lv_obj_set_size(layer_roller, 96, 52);
+    lv_obj_align(layer_roller, LV_ALIGN_TOP_LEFT, 6, 6);
     lv_obj_set_style_text_font(layer_roller, LV_FONT_DEFAULT, LV_PART_MAIN);
     lv_obj_set_style_text_font(layer_roller, LV_FONT_DEFAULT, LV_PART_SELECTED);
 }
@@ -436,23 +292,29 @@ static void move_caps_word_indicator(lv_obj_t *screen) {
     }
 
     lv_obj_t *caps_word_indicator = lv_obj_get_child(screen, 0);
-    lv_obj_align(caps_word_indicator, LV_ALIGN_TOP_LEFT, 16, 88);
+    lv_obj_align(caps_word_indicator, LV_ALIGN_BOTTOM_LEFT, 8, -8);
 }
 
 static void create_bongo_cat(lv_obj_t *screen) {
     cat_container = lv_obj_create(screen);
-    lv_obj_set_size(cat_container, 204, 120);
-    lv_obj_align(cat_container, LV_ALIGN_CENTER, 0, 8);
+    lv_obj_set_size(cat_container, CAT_CONTAINER_W, CAT_CONTAINER_H);
+    lv_obj_align(cat_container, LV_ALIGN_CENTER, 12, 14);
     lv_obj_set_style_bg_opa(cat_container, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_width(cat_container, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(cat_container, 0, LV_PART_MAIN);
-    lv_obj_clear_flag(cat_container, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(cat_container, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+
+    fire_img = lv_img_create(cat_container);
+    lv_img_set_src(fire_img, &bongo_fire_0);
+    lv_img_set_zoom(fire_img, FIRE_ZOOM_LARGE);
+    lv_obj_set_pos(fire_img, FIRE_BASE_X - FIRE_IMG_W / 2, FIRE_BASE_Y);
+    lv_obj_add_flag(fire_img, LV_OBJ_FLAG_HIDDEN);
 
     bongo_cat_img = lv_img_create(cat_container);
     lv_img_set_src(bongo_cat_img, &bongo_resting);
-    lv_obj_center(bongo_cat_img);
+    lv_obj_align(bongo_cat_img, LV_ALIGN_CENTER, CAT_X_OFFSET, CAT_Y_OFFSET);
 
-    /* Flame particles are created lazily inside flame_tick_callback */
+    lv_obj_move_foreground(cat_container);
 }
 
 static void install_display_overlay(void *unused) {
