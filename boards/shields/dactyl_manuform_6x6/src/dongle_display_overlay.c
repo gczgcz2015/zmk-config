@@ -10,12 +10,16 @@
 
 /* ──────────────────────── Bongo Cat Settings ──────────────────────── */
 
-#define BONGO_REST_DELAY_MS 160
+#define BONGO_ACTIVE_MS     110
+#define BONGO_BUSY_TICK_MS  120
+#define BONGO_BUSY_KPS_X10  28
 
 enum bongo_cat_frame {
     BONGO_CAT_RESTING,
     BONGO_CAT_LEFT,
     BONGO_CAT_RIGHT,
+    BONGO_CAT_BUSY,
+    BONGO_CAT_BOTH,
 };
 
 /* ──────────────────────── Typing Speed Tracker ──────────────────────── */
@@ -31,8 +35,8 @@ enum bongo_cat_frame {
 
 /*
  * Cat and flame placement within the 204x128 cat container.
- * Status indicators are moved to foreground so the cat's dark image
- * background does not cover them regardless of overlap.
+ * Cat frames use transparent indexed pixels so the foreground status
+ * indicators can overlap without being covered by an image background.
  */
 #define CAT_CONTAINER_W     204
 #define CAT_CONTAINER_H     128
@@ -40,13 +44,6 @@ enum bongo_cat_frame {
 #define CAT_Y_OFFSET        10
 #define CAT_CONTAINER_X     0
 #define CAT_CONTAINER_Y     6
-#define PAW_EXT_POINT_COUNT 2
-#define PAW_EXT_X0          30
-#define PAW_EXT_Y0          78
-#define PAW_EXT_X1          42
-#define PAW_EXT_Y1          78
-#define PAW_EXT_LEFT_Y      91
-#define PAW_EXT_RIGHT_Y     78
 #define FLAME_BASE_X        120   /* Head center X in container coords    */
 #define FLAME_BASE_Y        44    /* Flame base Y in container coords     */
 
@@ -61,16 +58,19 @@ typedef enum {
 
 /* Bongo cat */
 static struct k_work_delayable bongo_frame_work;
+static struct k_work_delayable bongo_return_work;
+static struct k_work_delayable bongo_busy_work;
 static struct k_work_delayable display_overlay_work;
 static lv_obj_t *bongo_cat_img;
 static lv_obj_t *cat_container;
 static lv_obj_t *layer_roller_obj;
 static lv_obj_t *caps_word_indicator_obj;
-static lv_obj_t *paw_extension_line;
 static bool display_overlay_installed;
 static enum bongo_cat_frame pending_bongo_frame = BONGO_CAT_RESTING;
 static uint8_t active_key_count;
 static bool use_left_frame = true;
+static bool busy_tick_running;
+static uint8_t busy_phase;
 
 /* Typing speed ring buffer (accessed from both event and LVGL contexts) */
 static int64_t keystroke_times[SPEED_RING_SIZE];
@@ -88,11 +88,12 @@ static struct k_work_delayable flame_tick_work;
 static bool flame_tick_running;
 static uint32_t flame_rng_state = 0xDEADBEEF;
 static flame_stroke_t flame_strokes[FLAME_STROKE_COUNT];
-static lv_point_t paw_extension_points[PAW_EXT_POINT_COUNT];
 
 /* ══════════════════════════════════════════════════════════════════ */
 /*                       Bongo Cat Animation                        */
 /* ══════════════════════════════════════════════════════════════════ */
+
+static int calc_kps_x10(void);
 
 static const lv_img_dsc_t *bongo_frame_image(enum bongo_cat_frame frame) {
     switch (frame) {
@@ -100,6 +101,10 @@ static const lv_img_dsc_t *bongo_frame_image(enum bongo_cat_frame frame) {
         return &bongo_casualleft;
     case BONGO_CAT_RIGHT:
         return &bongo_casualright;
+    case BONGO_CAT_BUSY:
+        return &bongo_busy;
+    case BONGO_CAT_BOTH:
+        return &bongo_both;
     case BONGO_CAT_RESTING:
     default:
         return &bongo_resting;
@@ -114,24 +119,6 @@ static void apply_bongo_frame(void *unused) {
     }
 
     lv_img_set_src(bongo_cat_img, bongo_frame_image(pending_bongo_frame));
-
-    if (paw_extension_line != NULL) {
-        if (pending_bongo_frame == BONGO_CAT_LEFT ||
-            pending_bongo_frame == BONGO_CAT_RIGHT) {
-            int y = pending_bongo_frame == BONGO_CAT_LEFT ? PAW_EXT_LEFT_Y
-                                                          : PAW_EXT_RIGHT_Y;
-
-            paw_extension_points[0].x = PAW_EXT_X0;
-            paw_extension_points[0].y = y;
-            paw_extension_points[1].x = PAW_EXT_X1;
-            paw_extension_points[1].y = y;
-            lv_line_set_points(paw_extension_line, paw_extension_points,
-                               PAW_EXT_POINT_COUNT);
-            lv_obj_clear_flag(paw_extension_line, LV_OBJ_FLAG_HIDDEN);
-        } else {
-            lv_obj_add_flag(paw_extension_line, LV_OBJ_FLAG_HIDDEN);
-        }
-    }
 }
 
 static void bongo_frame_work_handler(struct k_work *work) {
@@ -142,6 +129,62 @@ static void bongo_frame_work_handler(struct k_work *work) {
 static void schedule_bongo_frame(enum bongo_cat_frame frame, k_timeout_t delay) {
     pending_bongo_frame = frame;
     k_work_reschedule(&bongo_frame_work, delay);
+}
+
+static void bongo_return_work_handler(struct k_work *work) {
+    ARG_UNUSED(work);
+
+    if (!busy_tick_running) {
+        schedule_bongo_frame(BONGO_CAT_RESTING, K_NO_WAIT);
+    }
+}
+
+static void bongo_busy_work_handler(struct k_work *work) {
+    ARG_UNUSED(work);
+
+    if (!display_overlay_installed || calc_kps_x10() < BONGO_BUSY_KPS_X10) {
+        busy_tick_running = false;
+        busy_phase = 0;
+        schedule_bongo_frame(BONGO_CAT_RESTING, K_NO_WAIT);
+        return;
+    }
+
+    enum bongo_cat_frame frame = BONGO_CAT_RESTING;
+    if (busy_phase == 1) {
+        frame = BONGO_CAT_BUSY;
+    } else if (busy_phase == 2) {
+        frame = BONGO_CAT_BOTH;
+    }
+
+    schedule_bongo_frame(frame, K_NO_WAIT);
+    busy_phase = (busy_phase + 1) % 3;
+    k_work_reschedule(&bongo_busy_work, K_MSEC(BONGO_BUSY_TICK_MS));
+}
+
+static void start_busy_animation(void) {
+    k_work_cancel_delayable(&bongo_return_work);
+
+    if (busy_tick_running) {
+        return;
+    }
+
+    busy_tick_running = true;
+    busy_phase = 0;
+    k_work_reschedule(&bongo_busy_work, K_NO_WAIT);
+}
+
+static void stop_busy_animation(void) {
+    busy_tick_running = false;
+    busy_phase = 0;
+    k_work_cancel_delayable(&bongo_busy_work);
+}
+
+static void trigger_typing_frame(void) {
+    k_work_cancel_delayable(&bongo_return_work);
+    schedule_bongo_frame(use_left_frame ? BONGO_CAT_LEFT : BONGO_CAT_RIGHT,
+                         K_NO_WAIT);
+    use_left_frame = !use_left_frame;
+    k_work_reschedule(&bongo_return_work, K_MSEC(BONGO_ACTIVE_MS));
 }
 
 /* ══════════════════════════════════════════════════════════════════ */
@@ -384,20 +427,6 @@ static void create_bongo_cat(lv_obj_t *screen) {
     lv_img_set_src(bongo_cat_img, &bongo_resting);
     lv_obj_align(bongo_cat_img, LV_ALIGN_CENTER, CAT_X_OFFSET, CAT_Y_OFFSET);
 
-    paw_extension_points[0].x = PAW_EXT_X0;
-    paw_extension_points[0].y = PAW_EXT_Y0;
-    paw_extension_points[1].x = PAW_EXT_X1;
-    paw_extension_points[1].y = PAW_EXT_Y1;
-    paw_extension_line = lv_line_create(cat_container);
-    lv_line_set_points(paw_extension_line, paw_extension_points, PAW_EXT_POINT_COUNT);
-    lv_obj_set_style_line_color(paw_extension_line, lv_color_make(255, 255, 255),
-                                LV_PART_MAIN);
-    lv_obj_set_style_line_width(paw_extension_line, 4, LV_PART_MAIN);
-    lv_obj_set_style_line_rounded(paw_extension_line, true, LV_PART_MAIN);
-    lv_obj_clear_flag(paw_extension_line,
-                      LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(paw_extension_line, LV_OBJ_FLAG_HIDDEN);
-
     for (int i = 0; i < FLAME_STROKE_COUNT; i++) {
         flame_strokes[i].obj = lv_line_create(cat_container);
         lv_obj_clear_flag(flame_strokes[i].obj,
@@ -445,6 +474,8 @@ static void display_overlay_work_handler(struct k_work *work) {
 
 static int display_overlay_init(void) {
     k_work_init_delayable(&bongo_frame_work, bongo_frame_work_handler);
+    k_work_init_delayable(&bongo_return_work, bongo_return_work_handler);
+    k_work_init_delayable(&bongo_busy_work, bongo_busy_work_handler);
     k_work_init_delayable(&display_overlay_work, display_overlay_work_handler);
     k_work_init_delayable(&flame_tick_work, flame_tick_work_handler);
     k_work_schedule(&display_overlay_work, K_SECONDS(2));
@@ -479,16 +510,15 @@ static int bongo_cat_listener(const zmk_event_t *eh) {
             k_work_reschedule(&flame_tick_work, K_NO_WAIT);
         }
 
-        schedule_bongo_frame(use_left_frame ? BONGO_CAT_LEFT : BONGO_CAT_RIGHT,
-                             K_NO_WAIT);
-        use_left_frame = !use_left_frame;
+        if (calc_kps_x10() >= BONGO_BUSY_KPS_X10) {
+            start_busy_animation();
+        } else {
+            stop_busy_animation();
+            trigger_typing_frame();
+        }
     } else {
         if (active_key_count > 0) {
             active_key_count--;
-        }
-
-        if (active_key_count == 0) {
-            schedule_bongo_frame(BONGO_CAT_RESTING, K_MSEC(BONGO_REST_DELAY_MS));
         }
     }
 
