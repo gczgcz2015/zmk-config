@@ -27,11 +27,10 @@ enum bongo_cat_frame {
 #define SPEED_RING_SIZE     16    /* Track last 16 keystrokes             */
 #define FLAME_DECAY_MS      2000  /* Flame dies 2 s after last keystroke  */
 
-/* ──────────────────────── Flame Line Animation ──────────────────────── */
+/* ──────────────────────── Volcano Particle Animation ──────────────────────── */
 
 #define FLAME_TICK_MS       80    /* ~12 FPS flame animation              */
-#define FLAME_STROKE_COUNT  7
-#define FLAME_POINT_COUNT   4
+#define FLAME_SPARK_COUNT   45
 
 /*
  * Cat and flame placement within the 204x128 cat container.
@@ -44,15 +43,6 @@ enum bongo_cat_frame {
 #define CAT_Y_OFFSET        10
 #define CAT_CONTAINER_X     0
 #define CAT_CONTAINER_Y     6
-#define FLAME_BASE_X        120   /* Head center X in container coords    */
-#define FLAME_BASE_Y        44    /* Flame base Y in container coords     */
-
-typedef enum {
-    FLAME_NONE,      /* < 0.8 KPS */
-    FLAME_SMALL,     /* 0.8-2.8 KPS */
-    FLAME_MEDIUM,    /* 2.8-5 KPS */
-    FLAME_LARGE,     /* >= 5 KPS  */
-} flame_level_t;
 
 /* ──────────────────────── Static Variables ──────────────────────── */
 
@@ -78,16 +68,28 @@ static uint8_t speed_ring_head;
 static uint8_t speed_ring_count;
 static struct k_spinlock speed_lock;
 
-typedef struct {
-    lv_obj_t *obj;
-    lv_point_t points[FLAME_POINT_COUNT];
-} flame_stroke_t;
-
-/* Flame strokes */
+/* Flame Animation */
 static struct k_work_delayable flame_tick_work;
 static bool flame_tick_running;
 static uint32_t flame_rng_state = 0xDEADBEEF;
-static flame_stroke_t flame_strokes[FLAME_STROKE_COUNT];
+
+typedef struct {
+    int16_t x_q4;
+    int16_t y_q4;
+    int16_t vx_q4;
+    int16_t vy_q4;
+    int16_t origin_x;
+    int16_t origin_y;
+    int16_t life;
+    int16_t max_life;
+    uint8_t base_size;
+    uint8_t color_index;
+    bool right_side;
+    bool rear_body;
+} spark_state_t;
+
+static lv_obj_t *flame_sparks[FLAME_SPARK_COUNT];
+static spark_state_t spark_states[FLAME_SPARK_COUNT];
 
 /* ══════════════════════════════════════════════════════════════════ */
 /*                       Bongo Cat Animation                        */
@@ -239,16 +241,8 @@ static int calc_kps_x10(void) {
     return (int)((int64_t)(count - 1) * 10000 / span_ms);
 }
 
-static flame_level_t get_flame_level(void) {
-    int kps = calc_kps_x10();
-    if (kps >= 50) return FLAME_LARGE;   /* >= 5.0 KPS (~60 WPM) */
-    if (kps >= 28) return FLAME_MEDIUM;  /* >= 2.8 KPS (~34 WPM) */
-    if (kps >= 8) return FLAME_SMALL;    /* >= 0.8 KPS (~10 WPM) */
-    return FLAME_NONE;
-}
-
 /* ══════════════════════════════════════════════════════════════════ */
-/*                  Flame Line Animation                            */
+/*                  Volcano Particle Animation                      */
 /* ══════════════════════════════════════════════════════════════════ */
 
 /* Simple xorshift32 PRNG */
@@ -259,87 +253,220 @@ static uint32_t flame_rand(void) {
     return flame_rng_state;
 }
 
-static void hide_flame_strokes(void) {
-    for (int i = 0; i < FLAME_STROKE_COUNT; i++) {
-        if (flame_strokes[i].obj != NULL) {
-            lv_obj_add_flag(flame_strokes[i].obj, LV_OBJ_FLAG_HIDDEN);
+typedef struct {
+    int16_t x;
+    int16_t y;
+} flame_emitter_t;
+
+/*
+ * V9.1 preview emitters converted from screen coordinates into this
+ * cat_container. The conversion keeps them attached to the cat frame even
+ * though the LVGL image is centered with CAT_X/Y_OFFSET.
+ */
+static const flame_emitter_t volcano_emitters[] = {
+    {66, 74}, {76, 65}, {89, 58}, {101, 51}, {109, 47},
+    {120, 56}, {134, 61}, {144, 67},
+};
+
+static const flame_emitter_t volcano_right_emitters[] = {
+    {140, 65}, {148, 68}, {156, 71},
+};
+
+static const flame_emitter_t volcano_rear_emitters[] = {
+    {152, 70}, {157, 75}, {159, 81},
+};
+
+static int rand_range(int min, int max) {
+    return min + (int)(flame_rand() % (uint32_t)(max - min + 1));
+}
+
+static uint8_t mix_u8(uint8_t a, uint8_t b, uint8_t t) {
+    return (uint8_t)(((uint16_t)a * (100 - t) + (uint16_t)b * t) / 100);
+}
+
+static const flame_emitter_t *pick_emitter(const flame_emitter_t *emitters,
+                                           uint8_t count) {
+    return &emitters[flame_rand() % count];
+}
+
+static void hide_flame_sparks(void) {
+    for (int i = 0; i < FLAME_SPARK_COUNT; i++) {
+        if (flame_sparks[i] != NULL) {
+            lv_obj_add_flag(flame_sparks[i], LV_OBJ_FLAG_HIDDEN);
+        }
+        spark_states[i].life = 0;
+    }
+}
+
+static uint8_t get_flame_heat(void) {
+    int kps = calc_kps_x10();
+
+    if (kps < 8) {
+        return 0;
+    }
+    if (kps >= 60) {
+        return 100;
+    }
+
+    int t = ((kps - 8) * 100) / (60 - 8);
+    return (uint8_t)((t * t * (300 - 2 * t)) / 10000);
+}
+
+static lv_color_t volcano_spark_color(uint8_t heat, uint8_t color_index,
+                                      int ratio) {
+    static const uint8_t cold[3][3] = {
+        {70, 170, 255},
+        {175, 245, 255},
+        {55, 80, 230},
+    };
+    static const uint8_t hot[3][3] = {
+        {255, 95, 0},
+        {255, 218, 48},
+        {205, 28, 0},
+    };
+
+    uint8_t idx = color_index % 3;
+    uint8_t r = mix_u8(cold[idx][0], hot[idx][0], heat);
+    uint8_t g = mix_u8(cold[idx][1], hot[idx][1], heat);
+    uint8_t b = mix_u8(cold[idx][2], hot[idx][2], heat);
+
+    if (ratio < 35) {
+        uint8_t ember_t = (uint8_t)(((35 - ratio) * heat) / 35);
+        r = mix_u8(r, 80, ember_t);
+        g = mix_u8(g, 36, ember_t);
+        b = mix_u8(b, 18, ember_t);
+    }
+
+    return lv_color_make(r, g, b);
+}
+
+static void spawn_volcano_spark(spark_state_t *s, uint8_t heat) {
+    uint8_t rear_threshold = 16 + (heat * 14) / 100;
+    uint8_t right_threshold = 22 + (heat * 8) / 100;
+    uint8_t roll = flame_rand() % 100;
+    const flame_emitter_t *emitter;
+
+    s->rear_body = false;
+    s->right_side = false;
+
+    if (roll < rear_threshold) {
+        emitter = pick_emitter(volcano_rear_emitters,
+                               ARRAY_SIZE(volcano_rear_emitters));
+        s->rear_body = true;
+        s->right_side = true;
+    } else if (roll < right_threshold) {
+        emitter = pick_emitter(volcano_right_emitters,
+                               ARRAY_SIZE(volcano_right_emitters));
+        s->right_side = true;
+    } else {
+        emitter = pick_emitter(volcano_emitters, ARRAY_SIZE(volcano_emitters));
+        s->right_side = emitter->x >= 142;
+    }
+
+    s->origin_x = emitter->x;
+    s->origin_y = emitter->y;
+    s->x_q4 = (emitter->x + rand_range(-1, 1)) * 16;
+    s->y_q4 = (emitter->y + rand_range(-1, 1)) * 16;
+    s->max_life = s->rear_body ? rand_range(6, 11) : rand_range(8, 17);
+    s->life = s->max_life;
+    s->color_index = flame_rand() % 3;
+    s->base_size = (heat > 55 && (flame_rand() % 100) < 42) ? 2 : 1;
+
+    int side = rand_range(-45, 45);
+    if ((flame_rand() % 100) < (uint32_t)((heat * 45) / 100)) {
+        int extra = rand_range(15, 55);
+        side += (flame_rand() & 1) ? extra : -extra;
+    }
+    if (s->right_side) {
+        side = rand_range(-72, 8);
+    }
+    if (s->rear_body) {
+        side = rand_range(-105, -34);
+    }
+
+    int spread = 7 + (heat * 22) / 100;
+    int vx_total = (side * spread) / 100;
+    int vy_min = 12 + (heat * 16) / 100;
+    int vy_max = 22 + (heat * 30) / 100;
+    int vy_total = -rand_range(vy_min, vy_max);
+
+    if (heat > 55 && (flame_rand() % 100) < heat) {
+        int burst = (rand_range(5, 14) * heat) / 100;
+        vy_total -= burst;
+        if (s->right_side) {
+            vx_total -= (rand_range(2, 10) * heat) / 100;
+        } else {
+            int side_burst = (rand_range(2, 10) * heat) / 100;
+            vx_total += (flame_rand() & 1) ? side_burst : -side_burst;
         }
     }
+
+    s->vx_q4 = (vx_total * 16) / s->max_life;
+    s->vy_q4 = (vy_total * 16) / s->max_life;
 }
 
-static int flame_height_for_level(flame_level_t level) {
-    switch (level) {
-    case FLAME_LARGE:
-        return 34;
-    case FLAME_MEDIUM:
-        return 26;
-    case FLAME_SMALL:
-        return 18;
-    default:
-        return 0;
+static bool volcano_spark_clipped(const spark_state_t *s, uint8_t heat) {
+    int x = s->x_q4 / 16;
+    int y = s->y_q4 / 16;
+    int ratio = (s->life * 100) / s->max_life;
+    int age = 100 - ratio;
+
+    if (s->rear_body) {
+        if (age > 50) {
+            return true;
+        }
+        if (x > s->origin_x - 4 + heat / 100) {
+            return true;
+        }
+        if (y < s->origin_y - (7 + (heat * 15) / 100)) {
+            return true;
+        }
+        if (x > 164) {
+            return true;
+        }
+    } else if (s->right_side && x > s->origin_x + 10 + (heat * 4) / 100) {
+        return true;
     }
-}
 
-static int flame_active_strokes_for_level(flame_level_t level) {
-    switch (level) {
-    case FLAME_LARGE:
-        return FLAME_STROKE_COUNT;
-    case FLAME_MEDIUM:
-        return 5;
-    case FLAME_SMALL:
-        return 3;
-    default:
-        return 0;
+    if (s->right_side && x > 166) {
+        return true;
     }
-}
-
-static lv_color_t flame_color_for_index(int index) {
-    switch (index) {
-    case 0:
-    case 4:
-        return lv_color_make(190, 20, 0);
-    case 1:
-    case 3:
-        return lv_color_make(235, 52, 0);
-    case 2:
-        return lv_color_make(255, 104, 0);
-    case 5:
-        return lv_color_make(255, 170, 20);
-    case 6:
-    default:
-        return lv_color_make(255, 230, 70);
+    if (heat < 45 && y < 41) {
+        return true;
     }
+
+    return y < 27 || y > 111 || x < 16 || x > 200;
 }
 
-static void set_flame_stroke(int index, int x_offset, int height, int width,
-                             lv_color_t color, lv_opa_t opa) {
-    flame_stroke_t *stroke = &flame_strokes[index];
-
-    if (stroke->obj == NULL) {
+static void render_volcano_spark(int index, const spark_state_t *s,
+                                 uint8_t heat) {
+    if (flame_sparks[index] == NULL) {
         return;
     }
 
-    int sway_a = (int)(flame_rand() % 9) - 4;
-    int sway_b = (int)(flame_rand() % 13) - 6;
-    int tip_jitter = (int)(flame_rand() % 7) - 3;
-    int base_x = FLAME_BASE_X + x_offset;
-    int base_y = FLAME_BASE_Y + (int)(flame_rand() % 3);
+    int ratio = (s->life * 100) / s->max_life;
+    int size = s->base_size;
+    if (size > 1 && ratio < 55) {
+        size = 1;
+    }
 
-    stroke->points[0].x = base_x;
-    stroke->points[0].y = base_y;
-    stroke->points[1].x = base_x + sway_a;
-    stroke->points[1].y = base_y - height / 3;
-    stroke->points[2].x = base_x + sway_b;
-    stroke->points[2].y = base_y - (height * 2) / 3;
-    stroke->points[3].x = base_x + tip_jitter;
-    stroke->points[3].y = base_y - height;
+    uint16_t alpha_scale = (uint16_t)ratio * (60 + (heat * 40) / 100) / 100;
+    lv_opa_t opa = (lv_opa_t)((uint16_t)LV_OPA_COVER * alpha_scale / 100);
+    if (s->rear_body) {
+        opa = (lv_opa_t)((uint16_t)opa * 82 / 100);
+    }
+    if (opa < 35) {
+        lv_obj_add_flag(flame_sparks[index], LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
 
-    lv_line_set_points(stroke->obj, stroke->points, FLAME_POINT_COUNT);
-    lv_obj_set_style_line_color(stroke->obj, color, LV_PART_MAIN);
-    lv_obj_set_style_line_width(stroke->obj, width, LV_PART_MAIN);
-    lv_obj_set_style_line_opa(stroke->obj, opa, LV_PART_MAIN);
-    lv_obj_set_style_line_rounded(stroke->obj, true, LV_PART_MAIN);
-    lv_obj_clear_flag(stroke->obj, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_size(flame_sparks[index], size, size);
+    lv_obj_set_pos(flame_sparks[index], s->x_q4 / 16, s->y_q4 / 16);
+    lv_obj_set_style_bg_color(flame_sparks[index],
+                              volcano_spark_color(heat, s->color_index, ratio),
+                              LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(flame_sparks[index], opa, LV_PART_MAIN);
+    lv_obj_clear_flag(flame_sparks[index], LV_OBJ_FLAG_HIDDEN);
 }
 
 static void flame_tick_callback(void *unused) {
@@ -349,34 +476,53 @@ static void flame_tick_callback(void *unused) {
         return;
     }
 
-    flame_level_t level = get_flame_level();
-    int active_strokes = flame_active_strokes_for_level(level);
+    uint8_t heat = get_flame_heat();
 
-    if (active_strokes == 0) {
-        hide_flame_strokes();
+    if (heat == 0) {
+        hide_flame_sparks();
         flame_tick_running = false;
         k_work_cancel_delayable(&flame_tick_work);
         return;
     }
 
-    int height = flame_height_for_level(level);
-    int width_boost = level == FLAME_LARGE ? 2 : level == FLAME_MEDIUM ? 1 : 0;
+    int max_sparks = 5 + (heat * (FLAME_SPARK_COUNT - 5)) / 100;
+    int spawn_chance = 7 + (heat * 73) / 100;
 
-    static const int8_t offsets[FLAME_STROKE_COUNT] = {-16, -9, -3, 5, 12, 0, 2};
-    static const uint8_t height_scale[FLAME_STROKE_COUNT] = {70, 86, 100, 78, 66, 58, 42};
-    static const uint8_t width_base[FLAME_STROKE_COUNT] = {4, 5, 6, 5, 4, 3, 2};
-
-    for (int i = 0; i < FLAME_STROKE_COUNT; i++) {
-        if (i >= active_strokes) {
-            lv_obj_add_flag(flame_strokes[i].obj, LV_OBJ_FLAG_HIDDEN);
+    for (int i = 0; i < FLAME_SPARK_COUNT; i++) {
+        if (i >= max_sparks) {
+            if (flame_sparks[i] != NULL) {
+                lv_obj_add_flag(flame_sparks[i], LV_OBJ_FLAG_HIDDEN);
+            }
+            spark_states[i].life = 0;
             continue;
         }
 
-        int stroke_height = (height * height_scale[i]) / 100 + (int)(flame_rand() % 5);
-        int stroke_width = width_base[i] + width_boost;
-        lv_opa_t opa = i >= 5 ? LV_OPA_90 : LV_OPA_COVER;
-        set_flame_stroke(i, offsets[i], stroke_height, stroke_width,
-                          flame_color_for_index(i), opa);
+        spark_state_t *s = &spark_states[i];
+        if (s->life <= 0) {
+            if ((flame_rand() % 100) >= (uint32_t)spawn_chance) {
+                if (flame_sparks[i] != NULL) {
+                    lv_obj_add_flag(flame_sparks[i], LV_OBJ_FLAG_HIDDEN);
+                }
+                continue;
+            }
+            spawn_volcano_spark(s, heat);
+        } else {
+            s->x_q4 += s->vx_q4;
+            s->y_q4 += s->vy_q4;
+            s->vy_q4 += 4 + (heat * 3) / 100;
+            s->life--;
+            if (s->life > 0 && volcano_spark_clipped(s, heat)) {
+                s->life = 0;
+            }
+        }
+
+        if (s->life > 0) {
+            render_volcano_spark(i, s, heat);
+        } else {
+            if (flame_sparks[i] != NULL) {
+                lv_obj_add_flag(flame_sparks[i], LV_OBJ_FLAG_HIDDEN);
+            }
+        }
     }
 }
 
@@ -405,13 +551,14 @@ static void shrink_layer_roller(lv_obj_t *screen) {
 }
 
 static void move_caps_word_indicator(lv_obj_t *screen) {
-    if (lv_obj_get_child_cnt(screen) < 1) {
+    if (lv_obj_get_child_cnt(screen) < 3) {
+        caps_word_indicator_obj = NULL;
         return;
     }
 
     caps_word_indicator_obj = lv_obj_get_child(screen, 0);
     lv_obj_clear_flag(caps_word_indicator_obj, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_align(caps_word_indicator_obj, LV_ALIGN_TOP_LEFT, 20, 82);
+    lv_obj_align(caps_word_indicator_obj, LV_ALIGN_RIGHT_MID, -10, 46);
 }
 
 static void create_bongo_cat(lv_obj_t *screen) {
@@ -423,16 +570,23 @@ static void create_bongo_cat(lv_obj_t *screen) {
     lv_obj_set_style_pad_all(cat_container, 0, LV_PART_MAIN);
     lv_obj_clear_flag(cat_container, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
 
+    // 1. Pre-create sparks (behind the cat)
+    for (int i = 0; i < FLAME_SPARK_COUNT; i++) {
+        flame_sparks[i] = lv_obj_create(cat_container);
+        lv_obj_clear_flag(flame_sparks[i], LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_size(flame_sparks[i], 2, 2);
+        lv_obj_set_style_radius(flame_sparks[i], 10, LV_PART_MAIN); // radius 10 handles dynamic size circular styling
+        lv_obj_set_style_border_width(flame_sparks[i], 0, LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(flame_sparks[i], LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_add_flag(flame_sparks[i], LV_OBJ_FLAG_HIDDEN);
+        spark_states[i].life = 0;
+        spark_states[i].base_size = 2;
+    }
+
+    // 2. Create cat image on top of sparks (foreground)
     bongo_cat_img = lv_img_create(cat_container);
     lv_img_set_src(bongo_cat_img, &bongo_resting);
     lv_obj_align(bongo_cat_img, LV_ALIGN_CENTER, CAT_X_OFFSET, CAT_Y_OFFSET);
-
-    for (int i = 0; i < FLAME_STROKE_COUNT; i++) {
-        flame_strokes[i].obj = lv_line_create(cat_container);
-        lv_obj_clear_flag(flame_strokes[i].obj,
-                          LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_flag(flame_strokes[i].obj, LV_OBJ_FLAG_HIDDEN);
-    }
 
     lv_obj_move_foreground(cat_container);
     if (layer_roller_obj != NULL) {
