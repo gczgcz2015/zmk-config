@@ -4,11 +4,14 @@
 #include <zephyr/init.h>
 #include <zephyr/kernel.h>
 #include <zmk/event_manager.h>
-#include <zmk/events/caps_word_state_changed.h>
 #include <zmk/events/position_state_changed.h>
 #include <zmk/hid.h>
 
 #include "bongo_cat_art.h"
+
+#ifdef CONFIG_ZMK_CAPS_WORD
+#include <zmk/events/caps_word_state_changed.h>
+#endif
 
 LV_FONT_DECLARE(NerdFonts_Regular_20);
 
@@ -66,7 +69,9 @@ static bool use_left_frame = true;
 static bool busy_tick_running;
 static uint8_t busy_phase;
 static uint8_t pending_modifier_mask;
+#ifdef CONFIG_ZMK_CAPS_WORD
 static bool caps_word_active;
+#endif
 
 /* Typing speed ring buffer (accessed from both event and LVGL contexts) */
 static int64_t keystroke_times[SPEED_RING_SIZE];
@@ -254,9 +259,11 @@ static void apply_modifier_status(void *unused) {
     char text[24];
     size_t idx = 0;
 
+#ifdef CONFIG_ZMK_CAPS_WORD
     if (caps_word_active) {
         append_mod_symbol(text, &idx, sizeof(text), MOD_SYMBOL_CAPS);
     }
+#endif
     if (mods & (MOD_LCTL | MOD_RCTL)) {
         append_mod_symbol(text, &idx, sizeof(text), MOD_SYMBOL_CTRL);
     }
@@ -402,12 +409,14 @@ SYS_INIT(display_overlay_init, APPLICATION, CONFIG_APPLICATION_INIT_PRIORITY);
 /* ══════════════════════════════════════════════════════════════════ */
 
 static int bongo_cat_listener(const zmk_event_t *eh) {
+#ifdef CONFIG_ZMK_CAPS_WORD
     const struct zmk_caps_word_state_changed *caps_ev = as_zmk_caps_word_state_changed(eh);
     if (caps_ev != NULL) {
         caps_word_active = caps_ev->active;
         lv_async_call(apply_modifier_status, NULL);
         return ZMK_EV_EVENT_BUBBLE;
     }
+#endif
 
     const struct zmk_position_state_changed *ev = as_zmk_position_state_changed(eh);
 
@@ -439,5 +448,7 @@ static int bongo_cat_listener(const zmk_event_t *eh) {
 }
 
 ZMK_LISTENER(dactyl_bongo_cat, bongo_cat_listener);
+#ifdef CONFIG_ZMK_CAPS_WORD
 ZMK_SUBSCRIPTION(dactyl_bongo_cat, zmk_caps_word_state_changed);
+#endif
 ZMK_SUBSCRIPTION(dactyl_bongo_cat, zmk_position_state_changed);
