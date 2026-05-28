@@ -1,19 +1,18 @@
 #include <lvgl.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <dt-bindings/zmk/modifiers.h>
 #include <zephyr/init.h>
 #include <zephyr/kernel.h>
 #include <zmk/event_manager.h>
+#include <zmk/events/keycode_state_changed.h>
 #include <zmk/events/position_state_changed.h>
-#include <zmk/hid.h>
 
 #include "bongo_cat_art.h"
 
 #ifdef CONFIG_ZMK_CAPS_WORD
 #include <zmk/events/caps_word_state_changed.h>
 #endif
-
-LV_FONT_DECLARE(NerdFonts_Regular_20);
 
 /* ──────────────────────── Bongo Cat Settings ──────────────────────── */
 
@@ -47,8 +46,7 @@ enum bongo_cat_frame {
 
 /* ──────────────────────── Modifier Status ──────────────────────── */
 
-#define MOD_STATUS_TICK_MS  100
-#define MOD_STATUS_W        120
+#define MOD_STATUS_W        160
 
 /* ──────────────────────── Static Variables ──────────────────────── */
 
@@ -57,7 +55,6 @@ static struct k_work_delayable bongo_frame_work;
 static struct k_work_delayable bongo_return_work;
 static struct k_work_delayable bongo_busy_work;
 static struct k_work_delayable display_overlay_work;
-static struct k_work_delayable modifier_status_work;
 static lv_obj_t *bongo_cat_img;
 static lv_obj_t *cat_container;
 static lv_obj_t *layer_roller_obj;
@@ -69,6 +66,7 @@ static bool use_left_frame = true;
 static bool busy_tick_running;
 static uint8_t busy_phase;
 static uint8_t pending_modifier_mask;
+static uint8_t active_modifier_counts[8];
 #ifdef CONFIG_ZMK_CAPS_WORD
 static bool caps_word_active;
 #endif
@@ -88,9 +86,10 @@ static int calc_kps_x10(void);
 static const lv_img_dsc_t *bongo_frame_image(enum bongo_cat_frame frame) {
     switch (frame) {
     case BONGO_CAT_LEFT:
-        return &bongo_casualleft;
-    case BONGO_CAT_RIGHT:
+        /* The source names are from the original sprite sheet; visually this is the left paw. */
         return &bongo_casualright;
+    case BONGO_CAT_RIGHT:
+        return &bongo_casualleft;
     case BONGO_CAT_BUSY:
         return &bongo_busy;
     case BONGO_CAT_BOTH:
@@ -98,6 +97,29 @@ static const lv_img_dsc_t *bongo_frame_image(enum bongo_cat_frame frame) {
     case BONGO_CAT_RESTING:
     default:
         return &bongo_resting;
+    }
+}
+
+static void bongo_frame_offset(enum bongo_cat_frame frame, int16_t *x, int16_t *y) {
+    *x = CAT_X_OFFSET;
+    *y = CAT_Y_OFFSET;
+
+    switch (frame) {
+    case BONGO_CAT_LEFT:
+        *x -= 4;
+        *y += 1;
+        break;
+    case BONGO_CAT_RIGHT:
+        *y -= 1;
+        break;
+    case BONGO_CAT_BUSY:
+        *x -= 5;
+        *y -= 2;
+        break;
+    case BONGO_CAT_BOTH:
+    case BONGO_CAT_RESTING:
+    default:
+        break;
     }
 }
 
@@ -109,6 +131,11 @@ static void apply_bongo_frame(void *unused) {
     }
 
     lv_img_set_src(bongo_cat_img, bongo_frame_image(pending_bongo_frame));
+
+    int16_t x;
+    int16_t y;
+    bongo_frame_offset(pending_bongo_frame, &x, &y);
+    lv_obj_align(bongo_cat_img, LV_ALIGN_CENTER, x, y);
 }
 
 static void bongo_frame_work_handler(struct k_work *work) {
@@ -233,18 +260,17 @@ static int calc_kps_x10(void) {
 /*                       Modifier Status                           */
 /* ══════════════════════════════════════════════════════════════════ */
 
-#define MOD_SYMBOL_CTRL  "\xf3\xb0\x98\xb4"
-#define MOD_SYMBOL_SHIFT "\xf3\xb0\x98\xb6"
-#define MOD_SYMBOL_ALT   "\xf3\xb0\x98\xb5"
-#define MOD_SYMBOL_WIN   "\xee\x98\xaa"
-#define MOD_SYMBOL_CAPS  "\xf3\xb0\x98\xb2"
-
-static void append_mod_symbol(char *text, size_t *idx, size_t len,
-                              const char *symbol) {
-    while (*symbol != '\0' && *idx + 1 < len) {
-        text[*idx] = *symbol;
+static void append_mod_text(char *text, size_t *idx, size_t len,
+                            const char *label) {
+    if (*idx > 0 && *idx + 1 < len) {
+        text[*idx] = ' ';
         (*idx)++;
-        symbol++;
+    }
+
+    while (*label != '\0' && *idx + 1 < len) {
+        text[*idx] = *label;
+        (*idx)++;
+        label++;
     }
 }
 
@@ -261,20 +287,20 @@ static void apply_modifier_status(void *unused) {
 
 #ifdef CONFIG_ZMK_CAPS_WORD
     if (caps_word_active) {
-        append_mod_symbol(text, &idx, sizeof(text), MOD_SYMBOL_CAPS);
+        append_mod_text(text, &idx, sizeof(text), "CAPS");
     }
 #endif
     if (mods & (MOD_LCTL | MOD_RCTL)) {
-        append_mod_symbol(text, &idx, sizeof(text), MOD_SYMBOL_CTRL);
+        append_mod_text(text, &idx, sizeof(text), "CTRL");
     }
     if (mods & (MOD_LSFT | MOD_RSFT)) {
-        append_mod_symbol(text, &idx, sizeof(text), MOD_SYMBOL_SHIFT);
+        append_mod_text(text, &idx, sizeof(text), "SHIFT");
     }
     if (mods & (MOD_LALT | MOD_RALT)) {
-        append_mod_symbol(text, &idx, sizeof(text), MOD_SYMBOL_ALT);
+        append_mod_text(text, &idx, sizeof(text), "ALT");
     }
     if (mods & (MOD_LGUI | MOD_RGUI)) {
-        append_mod_symbol(text, &idx, sizeof(text), MOD_SYMBOL_WIN);
+        append_mod_text(text, &idx, sizeof(text), "GUI");
     }
 
     text[idx] = '\0';
@@ -287,20 +313,46 @@ static void apply_modifier_status(void *unused) {
     }
 }
 
-static void modifier_status_work_handler(struct k_work *work) {
-    ARG_UNUSED(work);
+static uint8_t modifier_mask_from_keycode(const struct zmk_keycode_state_changed *ev) {
+    uint8_t mods = ev->explicit_modifiers | ev->implicit_modifiers;
 
-    if (!display_overlay_installed) {
+    if (is_mod(ev->usage_page, ev->keycode)) {
+        mods |= 1U << (ev->keycode - HID_USAGE_KEY_KEYBOARD_LEFTCONTROL);
+    }
+
+    return mods;
+}
+
+static void update_modifier_status_from_keycode(const struct zmk_keycode_state_changed *ev) {
+    uint8_t mods = modifier_mask_from_keycode(ev);
+
+    if (mods == 0) {
         return;
     }
 
-    uint8_t mods = zmk_hid_get_keyboard_report()->body.modifiers;
-    if (mods != pending_modifier_mask) {
-        pending_modifier_mask = mods;
-        lv_async_call(apply_modifier_status, NULL);
+    for (uint8_t i = 0; i < 8; i++) {
+        if ((mods & (1U << i)) == 0) {
+            continue;
+        }
+
+        if (ev->state) {
+            if (active_modifier_counts[i] < UINT8_MAX) {
+                active_modifier_counts[i]++;
+            }
+        } else if (active_modifier_counts[i] > 0) {
+            active_modifier_counts[i]--;
+        }
     }
 
-    k_work_reschedule(&modifier_status_work, K_MSEC(MOD_STATUS_TICK_MS));
+    uint8_t mask = 0;
+    for (uint8_t i = 0; i < 8; i++) {
+        if (active_modifier_counts[i] > 0) {
+            mask |= 1U << i;
+        }
+    }
+
+    pending_modifier_mask = mask;
+    lv_async_call(apply_modifier_status, NULL);
 }
 
 /* ══════════════════════════════════════════════════════════════════ */
@@ -332,15 +384,14 @@ static void hide_builtin_caps_word_indicator(lv_obj_t *screen) {
 static void create_modifier_status(lv_obj_t *screen) {
     modifier_status_label = lv_label_create(screen);
     lv_obj_set_width(modifier_status_label, MOD_STATUS_W);
-    lv_obj_set_style_text_font(modifier_status_label, &NerdFonts_Regular_20,
-                               LV_PART_MAIN);
+    lv_obj_set_style_text_font(modifier_status_label, LV_FONT_DEFAULT, LV_PART_MAIN);
     lv_obj_set_style_text_color(modifier_status_label, lv_color_white(),
                                 LV_PART_MAIN);
-    lv_obj_set_style_text_align(modifier_status_label, LV_TEXT_ALIGN_CENTER,
+    lv_obj_set_style_text_align(modifier_status_label, LV_TEXT_ALIGN_RIGHT,
                                 LV_PART_MAIN);
     lv_label_set_long_mode(modifier_status_label, LV_LABEL_LONG_CLIP);
     lv_label_set_text(modifier_status_label, "");
-    lv_obj_align(modifier_status_label, LV_ALIGN_BOTTOM_MID, 0, -4);
+    lv_obj_align(modifier_status_label, LV_ALIGN_BOTTOM_RIGHT, -6, -4);
     lv_obj_add_flag(modifier_status_label, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(modifier_status_label);
 }
@@ -382,8 +433,6 @@ static void install_display_overlay(void *unused) {
     create_bongo_cat(screen);
     create_modifier_status(screen);
     display_overlay_installed = true;
-
-    k_work_reschedule(&modifier_status_work, K_NO_WAIT);
 }
 
 static void display_overlay_work_handler(struct k_work *work) {
@@ -396,7 +445,6 @@ static int display_overlay_init(void) {
     k_work_init_delayable(&bongo_return_work, bongo_return_work_handler);
     k_work_init_delayable(&bongo_busy_work, bongo_busy_work_handler);
     k_work_init_delayable(&display_overlay_work, display_overlay_work_handler);
-    k_work_init_delayable(&modifier_status_work, modifier_status_work_handler);
     k_work_schedule(&display_overlay_work, K_SECONDS(2));
 
     return 0;
@@ -417,6 +465,12 @@ static int bongo_cat_listener(const zmk_event_t *eh) {
         return ZMK_EV_EVENT_BUBBLE;
     }
 #endif
+
+    const struct zmk_keycode_state_changed *keycode_ev = as_zmk_keycode_state_changed(eh);
+    if (keycode_ev != NULL) {
+        update_modifier_status_from_keycode(keycode_ev);
+        return ZMK_EV_EVENT_BUBBLE;
+    }
 
     const struct zmk_position_state_changed *ev = as_zmk_position_state_changed(eh);
 
@@ -451,4 +505,5 @@ ZMK_LISTENER(dactyl_bongo_cat, bongo_cat_listener);
 #ifdef CONFIG_ZMK_CAPS_WORD
 ZMK_SUBSCRIPTION(dactyl_bongo_cat, zmk_caps_word_state_changed);
 #endif
+ZMK_SUBSCRIPTION(dactyl_bongo_cat, zmk_keycode_state_changed);
 ZMK_SUBSCRIPTION(dactyl_bongo_cat, zmk_position_state_changed);
