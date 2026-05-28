@@ -14,6 +14,8 @@
 #include <zmk/events/caps_word_state_changed.h>
 #endif
 
+LV_FONT_DECLARE(NerdFonts_Regular_20);
+
 /* ──────────────────────── Bongo Cat Settings ──────────────────────── */
 
 #define BONGO_ACTIVE_MS     110
@@ -46,7 +48,7 @@ enum bongo_cat_frame {
 
 /* ──────────────────────── Modifier Status ──────────────────────── */
 
-#define MOD_STATUS_W        160
+#define MOD_STATUS_W        156
 
 /* ──────────────────────── Static Variables ──────────────────────── */
 
@@ -260,17 +262,18 @@ static int calc_kps_x10(void) {
 /*                       Modifier Status                           */
 /* ══════════════════════════════════════════════════════════════════ */
 
-static void append_mod_text(char *text, size_t *idx, size_t len,
-                            const char *label) {
-    if (*idx > 0 && *idx + 1 < len) {
-        text[*idx] = ' ';
-        (*idx)++;
-    }
+#define MOD_SYMBOL_CTRL  "\xf3\xb0\x98\xb4"
+#define MOD_SYMBOL_SHIFT "\xf3\xb0\x98\xb6"
+#define MOD_SYMBOL_ALT   "\xf3\xb0\x98\xb5"
+#define MOD_SYMBOL_WIN   "\xee\x98\xaa"
+#define MOD_SYMBOL_CAPS  "\xf3\xb0\x98\xb2"
 
-    while (*label != '\0' && *idx + 1 < len) {
-        text[*idx] = *label;
+static void append_mod_symbol(char *text, size_t *idx, size_t len,
+                              const char *symbol) {
+    while (*symbol != '\0' && *idx + 1 < len) {
+        text[*idx] = *symbol;
         (*idx)++;
-        label++;
+        symbol++;
     }
 }
 
@@ -287,20 +290,20 @@ static void apply_modifier_status(void *unused) {
 
 #ifdef CONFIG_ZMK_CAPS_WORD
     if (caps_word_active) {
-        append_mod_text(text, &idx, sizeof(text), "CAPS");
+        append_mod_symbol(text, &idx, sizeof(text), MOD_SYMBOL_CAPS);
     }
 #endif
     if (mods & (MOD_LCTL | MOD_RCTL)) {
-        append_mod_text(text, &idx, sizeof(text), "CTRL");
+        append_mod_symbol(text, &idx, sizeof(text), MOD_SYMBOL_CTRL);
     }
     if (mods & (MOD_LSFT | MOD_RSFT)) {
-        append_mod_text(text, &idx, sizeof(text), "SHIFT");
+        append_mod_symbol(text, &idx, sizeof(text), MOD_SYMBOL_SHIFT);
     }
     if (mods & (MOD_LALT | MOD_RALT)) {
-        append_mod_text(text, &idx, sizeof(text), "ALT");
+        append_mod_symbol(text, &idx, sizeof(text), MOD_SYMBOL_ALT);
     }
     if (mods & (MOD_LGUI | MOD_RGUI)) {
-        append_mod_text(text, &idx, sizeof(text), "GUI");
+        append_mod_symbol(text, &idx, sizeof(text), MOD_SYMBOL_WIN);
     }
 
     text[idx] = '\0';
@@ -384,14 +387,16 @@ static void hide_builtin_caps_word_indicator(lv_obj_t *screen) {
 static void create_modifier_status(lv_obj_t *screen) {
     modifier_status_label = lv_label_create(screen);
     lv_obj_set_width(modifier_status_label, MOD_STATUS_W);
-    lv_obj_set_style_text_font(modifier_status_label, LV_FONT_DEFAULT, LV_PART_MAIN);
+    lv_obj_set_style_text_font(modifier_status_label, &NerdFonts_Regular_20,
+                               LV_PART_MAIN);
     lv_obj_set_style_text_color(modifier_status_label, lv_color_white(),
                                 LV_PART_MAIN);
     lv_obj_set_style_text_align(modifier_status_label, LV_TEXT_ALIGN_RIGHT,
                                 LV_PART_MAIN);
+    lv_obj_set_style_transform_zoom(modifier_status_label, 300, LV_PART_MAIN);
     lv_label_set_long_mode(modifier_status_label, LV_LABEL_LONG_CLIP);
     lv_label_set_text(modifier_status_label, "");
-    lv_obj_align(modifier_status_label, LV_ALIGN_BOTTOM_RIGHT, -6, -4);
+    lv_obj_align(modifier_status_label, LV_ALIGN_BOTTOM_RIGHT, -10, -24);
     lv_obj_add_flag(modifier_status_label, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(modifier_status_label);
 }
