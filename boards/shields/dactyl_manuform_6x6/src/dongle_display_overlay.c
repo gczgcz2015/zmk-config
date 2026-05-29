@@ -94,6 +94,8 @@ static uint8_t active_key_count;
 static bool busy_tick_running;
 static uint8_t busy_phase;
 static enum bongo_cat_frame pending_down_frame = BONGO_CAT_LEFT_DOWN;
+static uint8_t active_modifier_counts[8];
+static uint8_t position_modifier_mask;
 static uint8_t pending_modifier_mask;
 #ifdef CONFIG_ZMK_CAPS_WORD
 static bool caps_word_active;
@@ -403,6 +405,70 @@ static void apply_modifier_status(void *unused) {
     }
 }
 
+static void set_modifier_status_mask(uint8_t mask) {
+    if (mask == pending_modifier_mask) {
+        return;
+    }
+
+    pending_modifier_mask = mask;
+    lv_async_call(apply_modifier_status, NULL);
+}
+
+static uint8_t modifier_mask_from_position(uint32_t position) {
+    /* Physical modifier positions from the base keymap. */
+    switch (position) {
+    case 12:
+    case 27:
+        return MOD_LCTL;
+    case 58:
+        return MOD_RCTL;
+    case 18:
+    case 28:
+        return MOD_LSFT;
+    case 61:
+        return MOD_RALT;
+    case 29:
+        return MOD_LGUI;
+    case 60:
+        return MOD_RGUI;
+    default:
+        return 0;
+    }
+}
+
+static void update_modifier_status_from_position(uint32_t position, bool pressed) {
+    uint8_t mods = modifier_mask_from_position(position);
+
+    if (mods == 0) {
+        return;
+    }
+
+    for (uint8_t i = 0; i < 8; i++) {
+        if ((mods & (1U << i)) == 0) {
+            continue;
+        }
+
+        if (pressed) {
+            if (active_modifier_counts[i] < UINT8_MAX) {
+                active_modifier_counts[i]++;
+            }
+        } else if (active_modifier_counts[i] > 0) {
+            active_modifier_counts[i]--;
+        }
+    }
+
+    uint8_t mask = 0;
+    for (uint8_t i = 0; i < 8; i++) {
+        if (active_modifier_counts[i] > 0) {
+            mask |= 1U << i;
+        }
+    }
+
+    position_modifier_mask = mask;
+    set_modifier_status_mask(position_modifier_mask |
+                             zmk_hid_get_keyboard_report()->body.modifiers);
+}
+
 static void modifier_status_work_handler(struct k_work *work) {
     ARG_UNUSED(work);
 
@@ -410,11 +476,9 @@ static void modifier_status_work_handler(struct k_work *work) {
         return;
     }
 
-    uint8_t mods = zmk_hid_get_keyboard_report()->body.modifiers;
-    if (mods != pending_modifier_mask) {
-        pending_modifier_mask = mods;
-        lv_async_call(apply_modifier_status, NULL);
-    }
+    uint8_t mods = position_modifier_mask |
+                   zmk_hid_get_keyboard_report()->body.modifiers;
+    set_modifier_status_mask(mods);
 
     k_work_reschedule(&modifier_status_work, K_MSEC(MOD_STATUS_TICK_MS));
 }
@@ -601,6 +665,8 @@ static int bongo_cat_listener(const zmk_event_t *eh) {
             active_key_count++;
         }
 
+        update_modifier_status_from_position(ev->position, true);
+
         /* Record timestamp for typing speed calculation */
         record_keystroke_time();
 
@@ -611,6 +677,8 @@ static int bongo_cat_listener(const zmk_event_t *eh) {
             trigger_typing_frame(ev->position < BONGO_RIGHT_FIRST_POSITION);
         }
     } else {
+        update_modifier_status_from_position(ev->position, false);
+
         if (active_key_count > 0) {
             active_key_count--;
         }
