@@ -5,8 +5,10 @@
 #include <zephyr/init.h>
 #include <zephyr/kernel.h>
 #include <zmk/event_manager.h>
-#include <zmk/events/keycode_state_changed.h>
+#include <zmk/events/layer_state_changed.h>
 #include <zmk/events/position_state_changed.h>
+#include <zmk/hid.h>
+#include <zmk/keymap.h>
 
 #include "bongo_cat_art.h"
 
@@ -19,13 +21,16 @@ LV_FONT_DECLARE(NerdFonts_Regular_20);
 /* ──────────────────────── Bongo Cat Settings ──────────────────────── */
 
 #define BONGO_ACTIVE_MS     110
+#define BONGO_DOWN_MS       80
 #define BONGO_BUSY_TICK_MS  120
 #define BONGO_BUSY_KPS_X10  28
 
 enum bongo_cat_frame {
     BONGO_CAT_RESTING,
-    BONGO_CAT_LEFT,
-    BONGO_CAT_RIGHT,
+    BONGO_CAT_LEFT_UP,
+    BONGO_CAT_LEFT_DOWN,
+    BONGO_CAT_RIGHT_UP,
+    BONGO_CAT_RIGHT_DOWN,
     BONGO_CAT_BUSY,
     BONGO_CAT_BOTH,
 };
@@ -45,30 +50,51 @@ enum bongo_cat_frame {
 #define CAT_Y_OFFSET        8
 #define CAT_CONTAINER_X     0
 #define CAT_CONTAINER_Y     0
+#define CAT_IMAGE_W         204
+#define CAT_IMAGE_H         120
+#define BONGO_RIGHT_FIRST_POSITION 31
+#define LEFT_TAP_MASK_X     49
+#define LEFT_TAP_MASK_Y     80
+#define LEFT_TAP_MASK_W     25
+#define LEFT_TAP_MASK_H     13
+#define RIGHT_TAP_MASK_X    109
+#define RIGHT_TAP_MASK_Y    89
+#define RIGHT_TAP_MASK_W    31
+#define RIGHT_TAP_MASK_H    12
 
 /* ──────────────────────── Modifier Status ──────────────────────── */
 
+#define MOD_STATUS_TICK_MS  100
 #define MOD_STATUS_W        156
+
+/* ──────────────────────── Layer Status ──────────────────────── */
+
+#define LAYER_STATUS_W      92
+#define LAYER_FN_INDEX      1
 
 /* ──────────────────────── Static Variables ──────────────────────── */
 
 /* Bongo cat */
 static struct k_work_delayable bongo_frame_work;
+static struct k_work_delayable bongo_down_work;
 static struct k_work_delayable bongo_return_work;
 static struct k_work_delayable bongo_busy_work;
 static struct k_work_delayable display_overlay_work;
+static struct k_work_delayable modifier_status_work;
 static lv_obj_t *bongo_cat_img;
 static lv_obj_t *cat_container;
+static lv_obj_t *left_tap_mask;
+static lv_obj_t *right_tap_mask;
 static lv_obj_t *layer_roller_obj;
+static lv_obj_t *layer_status_label;
 static lv_obj_t *modifier_status_label;
 static bool display_overlay_installed;
 static enum bongo_cat_frame pending_bongo_frame = BONGO_CAT_RESTING;
 static uint8_t active_key_count;
-static bool use_left_frame = true;
 static bool busy_tick_running;
 static uint8_t busy_phase;
+static enum bongo_cat_frame pending_down_frame = BONGO_CAT_LEFT_DOWN;
 static uint8_t pending_modifier_mask;
-static uint8_t active_modifier_counts[8];
 #ifdef CONFIG_ZMK_CAPS_WORD
 static bool caps_word_active;
 #endif
@@ -87,10 +113,12 @@ static int calc_kps_x10(void);
 
 static const lv_img_dsc_t *bongo_frame_image(enum bongo_cat_frame frame) {
     switch (frame) {
-    case BONGO_CAT_LEFT:
-        /* The source names are from the original sprite sheet; visually this is the left paw. */
+    case BONGO_CAT_LEFT_UP:
         return &bongo_casualright;
-    case BONGO_CAT_RIGHT:
+    case BONGO_CAT_LEFT_DOWN:
+    case BONGO_CAT_RIGHT_DOWN:
+        return &bongo_both;
+    case BONGO_CAT_RIGHT_UP:
         return &bongo_casualleft;
     case BONGO_CAT_BUSY:
         return &bongo_busy;
@@ -107,19 +135,65 @@ static void bongo_frame_offset(enum bongo_cat_frame frame, int16_t *x, int16_t *
     *y = CAT_Y_OFFSET;
 
     switch (frame) {
-    case BONGO_CAT_LEFT:
+    case BONGO_CAT_LEFT_UP:
         *x -= 4;
         *y += 1;
         break;
-    case BONGO_CAT_RIGHT:
+    case BONGO_CAT_RIGHT_UP:
         *y -= 1;
         break;
     case BONGO_CAT_BUSY:
         *x -= 5;
         *y -= 2;
         break;
+    case BONGO_CAT_LEFT_DOWN:
+    case BONGO_CAT_RIGHT_DOWN:
     case BONGO_CAT_BOTH:
     case BONGO_CAT_RESTING:
+    default:
+        break;
+    }
+}
+
+static void set_tap_mask(lv_obj_t *mask, int16_t img_x, int16_t img_y,
+                         int16_t mask_x, int16_t mask_y,
+                         int16_t mask_w, int16_t mask_h) {
+    if (mask == NULL) {
+        return;
+    }
+
+    lv_obj_set_size(mask, mask_w, mask_h);
+    lv_obj_set_pos(mask, img_x + mask_x, img_y + mask_y);
+    lv_obj_clear_flag(mask, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(mask);
+}
+
+static void apply_tap_masks(enum bongo_cat_frame frame, int16_t frame_x,
+                            int16_t frame_y) {
+    if (left_tap_mask != NULL) {
+        lv_obj_add_flag(left_tap_mask, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (right_tap_mask != NULL) {
+        lv_obj_add_flag(right_tap_mask, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    int16_t img_x = (CAT_CONTAINER_W - CAT_IMAGE_W) / 2 + frame_x;
+    int16_t img_y = (CAT_CONTAINER_H - CAT_IMAGE_H) / 2 + frame_y;
+
+    switch (frame) {
+    case BONGO_CAT_LEFT_UP:
+    case BONGO_CAT_LEFT_DOWN:
+        set_tap_mask(right_tap_mask, img_x, img_y, RIGHT_TAP_MASK_X,
+                     RIGHT_TAP_MASK_Y, RIGHT_TAP_MASK_W, RIGHT_TAP_MASK_H);
+        break;
+    case BONGO_CAT_RIGHT_UP:
+    case BONGO_CAT_RIGHT_DOWN:
+        set_tap_mask(left_tap_mask, img_x, img_y, LEFT_TAP_MASK_X,
+                     LEFT_TAP_MASK_Y, LEFT_TAP_MASK_W, LEFT_TAP_MASK_H);
+        break;
+    case BONGO_CAT_RESTING:
+    case BONGO_CAT_BUSY:
+    case BONGO_CAT_BOTH:
     default:
         break;
     }
@@ -138,6 +212,7 @@ static void apply_bongo_frame(void *unused) {
     int16_t y;
     bongo_frame_offset(pending_bongo_frame, &x, &y);
     lv_obj_align(bongo_cat_img, LV_ALIGN_CENTER, x, y);
+    apply_tap_masks(pending_bongo_frame, x, y);
 }
 
 static void bongo_frame_work_handler(struct k_work *work) {
@@ -155,6 +230,15 @@ static void bongo_return_work_handler(struct k_work *work) {
 
     if (!busy_tick_running) {
         schedule_bongo_frame(BONGO_CAT_RESTING, K_NO_WAIT);
+    }
+}
+
+static void bongo_down_work_handler(struct k_work *work) {
+    ARG_UNUSED(work);
+
+    if (!busy_tick_running) {
+        schedule_bongo_frame(pending_down_frame, K_NO_WAIT);
+        k_work_reschedule(&bongo_return_work, K_MSEC(BONGO_ACTIVE_MS));
     }
 }
 
@@ -181,6 +265,7 @@ static void bongo_busy_work_handler(struct k_work *work) {
 }
 
 static void start_busy_animation(void) {
+    k_work_cancel_delayable(&bongo_down_work);
     k_work_cancel_delayable(&bongo_return_work);
 
     if (busy_tick_running) {
@@ -198,12 +283,14 @@ static void stop_busy_animation(void) {
     k_work_cancel_delayable(&bongo_busy_work);
 }
 
-static void trigger_typing_frame(void) {
+static void trigger_typing_frame(bool left_hand) {
+    pending_down_frame = left_hand ? BONGO_CAT_LEFT_DOWN : BONGO_CAT_RIGHT_DOWN;
+
+    k_work_cancel_delayable(&bongo_down_work);
     k_work_cancel_delayable(&bongo_return_work);
-    schedule_bongo_frame(use_left_frame ? BONGO_CAT_LEFT : BONGO_CAT_RIGHT,
+    schedule_bongo_frame(left_hand ? BONGO_CAT_LEFT_UP : BONGO_CAT_RIGHT_UP,
                          K_NO_WAIT);
-    use_left_frame = !use_left_frame;
-    k_work_reschedule(&bongo_return_work, K_MSEC(BONGO_ACTIVE_MS));
+    k_work_reschedule(&bongo_down_work, K_MSEC(BONGO_DOWN_MS));
 }
 
 /* ══════════════════════════════════════════════════════════════════ */
@@ -316,53 +403,49 @@ static void apply_modifier_status(void *unused) {
     }
 }
 
-static uint8_t modifier_mask_from_keycode(const struct zmk_keycode_state_changed *ev) {
-    uint8_t mods = ev->explicit_modifiers | ev->implicit_modifiers;
+static void modifier_status_work_handler(struct k_work *work) {
+    ARG_UNUSED(work);
 
-    if (is_mod(ev->usage_page, ev->keycode)) {
-        mods |= 1U << (ev->keycode - HID_USAGE_KEY_KEYBOARD_LEFTCONTROL);
-    }
-
-    return mods;
-}
-
-static void update_modifier_status_from_keycode(const struct zmk_keycode_state_changed *ev) {
-    uint8_t mods = modifier_mask_from_keycode(ev);
-
-    if (mods == 0) {
+    if (!display_overlay_installed) {
         return;
     }
 
-    for (uint8_t i = 0; i < 8; i++) {
-        if ((mods & (1U << i)) == 0) {
-            continue;
-        }
-
-        if (ev->state) {
-            if (active_modifier_counts[i] < UINT8_MAX) {
-                active_modifier_counts[i]++;
-            }
-        } else if (active_modifier_counts[i] > 0) {
-            active_modifier_counts[i]--;
-        }
+    uint8_t mods = zmk_hid_get_keyboard_report()->body.modifiers;
+    if (mods != pending_modifier_mask) {
+        pending_modifier_mask = mods;
+        lv_async_call(apply_modifier_status, NULL);
     }
 
-    uint8_t mask = 0;
-    for (uint8_t i = 0; i < 8; i++) {
-        if (active_modifier_counts[i] > 0) {
-            mask |= 1U << i;
-        }
+    k_work_reschedule(&modifier_status_work, K_MSEC(MOD_STATUS_TICK_MS));
+}
+
+/* ══════════════════════════════════════════════════════════════════ */
+/*                       Layer Status                              */
+/* ══════════════════════════════════════════════════════════════════ */
+
+static void apply_layer_status(void *unused) {
+    ARG_UNUSED(unused);
+
+    if (layer_status_label == NULL) {
+        return;
     }
 
-    pending_modifier_mask = mask;
-    lv_async_call(apply_modifier_status, NULL);
+    uint8_t layer = zmk_keymap_highest_layer_active();
+
+    if (layer == LAYER_FN_INDEX) {
+        lv_label_set_text(layer_status_label,
+                          "  #606060 BASE#\n> #ffffff FN#");
+    } else {
+        lv_label_set_text(layer_status_label,
+                          "> #ffffff BASE#\n  #606060 FN#");
+    }
 }
 
 /* ══════════════════════════════════════════════════════════════════ */
 /*                       Display Overlay Setup                      */
 /* ══════════════════════════════════════════════════════════════════ */
 
-static void shrink_layer_roller(lv_obj_t *screen) {
+static void hide_layer_roller(lv_obj_t *screen) {
     uint32_t child_count = lv_obj_get_child_cnt(screen);
 
     if (child_count == 0) {
@@ -370,10 +453,7 @@ static void shrink_layer_roller(lv_obj_t *screen) {
     }
 
     layer_roller_obj = lv_obj_get_child(screen, child_count - 1);
-    lv_obj_set_size(layer_roller_obj, 104, 58);
-    lv_obj_align(layer_roller_obj, LV_ALIGN_TOP_LEFT, 8, 18);
-    lv_obj_set_style_text_font(layer_roller_obj, LV_FONT_DEFAULT, LV_PART_MAIN);
-    lv_obj_set_style_text_font(layer_roller_obj, LV_FONT_DEFAULT, LV_PART_SELECTED);
+    lv_obj_add_flag(layer_roller_obj, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void hide_builtin_caps_word_indicator(lv_obj_t *screen) {
@@ -401,6 +481,22 @@ static void create_modifier_status(lv_obj_t *screen) {
     lv_obj_move_foreground(modifier_status_label);
 }
 
+static void create_layer_status(lv_obj_t *screen) {
+    layer_status_label = lv_label_create(screen);
+    lv_obj_set_width(layer_status_label, LAYER_STATUS_W);
+    lv_obj_set_style_text_font(layer_status_label, LV_FONT_DEFAULT,
+                               LV_PART_MAIN);
+    lv_obj_set_style_text_color(layer_status_label, lv_color_white(),
+                                LV_PART_MAIN);
+    lv_obj_set_style_text_align(layer_status_label, LV_TEXT_ALIGN_RIGHT,
+                                LV_PART_MAIN);
+    lv_label_set_recolor(layer_status_label, true);
+    lv_label_set_long_mode(layer_status_label, LV_LABEL_LONG_CLIP);
+    lv_obj_align(layer_status_label, LV_ALIGN_TOP_RIGHT, -10, 8);
+    apply_layer_status(NULL);
+    lv_obj_move_foreground(layer_status_label);
+}
+
 static void create_bongo_cat(lv_obj_t *screen) {
     cat_container = lv_obj_create(screen);
     lv_obj_set_size(cat_container, CAT_CONTAINER_W, CAT_CONTAINER_H);
@@ -413,6 +509,18 @@ static void create_bongo_cat(lv_obj_t *screen) {
     bongo_cat_img = lv_img_create(cat_container);
     lv_img_set_src(bongo_cat_img, &bongo_resting);
     lv_obj_align(bongo_cat_img, LV_ALIGN_CENTER, CAT_X_OFFSET, CAT_Y_OFFSET);
+
+    left_tap_mask = lv_obj_create(cat_container);
+    right_tap_mask = lv_obj_create(cat_container);
+    lv_obj_t *masks[] = {left_tap_mask, right_tap_mask};
+    for (size_t i = 0; i < 2; i++) {
+        lv_obj_clear_flag(masks[i], LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_bg_color(masks[i], lv_color_black(), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(masks[i], LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_border_width(masks[i], 0, LV_PART_MAIN);
+        lv_obj_set_style_pad_all(masks[i], 0, LV_PART_MAIN);
+        lv_obj_add_flag(masks[i], LV_OBJ_FLAG_HIDDEN);
+    }
 
     lv_obj_move_foreground(cat_container);
     if (layer_roller_obj != NULL) {
@@ -433,11 +541,14 @@ static void install_display_overlay(void *unused) {
         return;
     }
 
-    shrink_layer_roller(screen);
+    hide_layer_roller(screen);
     hide_builtin_caps_word_indicator(screen);
     create_bongo_cat(screen);
+    create_layer_status(screen);
     create_modifier_status(screen);
     display_overlay_installed = true;
+
+    k_work_reschedule(&modifier_status_work, K_NO_WAIT);
 }
 
 static void display_overlay_work_handler(struct k_work *work) {
@@ -447,9 +558,11 @@ static void display_overlay_work_handler(struct k_work *work) {
 
 static int display_overlay_init(void) {
     k_work_init_delayable(&bongo_frame_work, bongo_frame_work_handler);
+    k_work_init_delayable(&bongo_down_work, bongo_down_work_handler);
     k_work_init_delayable(&bongo_return_work, bongo_return_work_handler);
     k_work_init_delayable(&bongo_busy_work, bongo_busy_work_handler);
     k_work_init_delayable(&display_overlay_work, display_overlay_work_handler);
+    k_work_init_delayable(&modifier_status_work, modifier_status_work_handler);
     k_work_schedule(&display_overlay_work, K_SECONDS(2));
 
     return 0;
@@ -471,9 +584,9 @@ static int bongo_cat_listener(const zmk_event_t *eh) {
     }
 #endif
 
-    const struct zmk_keycode_state_changed *keycode_ev = as_zmk_keycode_state_changed(eh);
-    if (keycode_ev != NULL) {
-        update_modifier_status_from_keycode(keycode_ev);
+    const struct zmk_layer_state_changed *layer_ev = as_zmk_layer_state_changed(eh);
+    if (layer_ev != NULL) {
+        lv_async_call(apply_layer_status, NULL);
         return ZMK_EV_EVENT_BUBBLE;
     }
 
@@ -495,7 +608,7 @@ static int bongo_cat_listener(const zmk_event_t *eh) {
             start_busy_animation();
         } else {
             stop_busy_animation();
-            trigger_typing_frame();
+            trigger_typing_frame(ev->position < BONGO_RIGHT_FIRST_POSITION);
         }
     } else {
         if (active_key_count > 0) {
@@ -510,5 +623,5 @@ ZMK_LISTENER(dactyl_bongo_cat, bongo_cat_listener);
 #ifdef CONFIG_ZMK_CAPS_WORD
 ZMK_SUBSCRIPTION(dactyl_bongo_cat, zmk_caps_word_state_changed);
 #endif
-ZMK_SUBSCRIPTION(dactyl_bongo_cat, zmk_keycode_state_changed);
+ZMK_SUBSCRIPTION(dactyl_bongo_cat, zmk_layer_state_changed);
 ZMK_SUBSCRIPTION(dactyl_bongo_cat, zmk_position_state_changed);
