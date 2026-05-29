@@ -66,6 +66,8 @@ enum bongo_cat_frame {
 
 #define MOD_STATUS_TICK_MS  100
 #define MOD_STATUS_W        156
+#define MOD_STATUS_ZOOM     320
+#define MOD_STATUS_SPACING  6
 #define MOD_SYMBOL_CAPS     "\xf3\xb0\x98\xb2"
 #define MOD_SYMBOL_CTRL     "\xf3\xb0\x98\xb4"
 #define MOD_SYMBOL_SHIFT    "\xf3\xb0\x98\xb6"
@@ -358,11 +360,6 @@ static int calc_kps_x10(void) {
 
 static void append_mod_symbol(char *text, size_t *idx, size_t len,
                               const char *symbol) {
-    if (*idx > 0 && *idx + 1 < len) {
-        text[*idx] = ' ';
-        (*idx)++;
-    }
-
     while (*symbol != '\0' && *idx + 1 < len) {
         text[*idx] = *symbol;
         (*idx)++;
@@ -541,9 +538,13 @@ static void create_modifier_status(lv_obj_t *screen) {
                                 LV_PART_MAIN);
     lv_obj_set_style_text_align(modifier_status_label, LV_TEXT_ALIGN_CENTER,
                                 LV_PART_MAIN);
+    lv_obj_set_style_text_letter_space(modifier_status_label, MOD_STATUS_SPACING,
+                                       LV_PART_MAIN);
+    lv_obj_set_style_transform_zoom(modifier_status_label, MOD_STATUS_ZOOM,
+                                    LV_PART_MAIN);
     lv_label_set_long_mode(modifier_status_label, LV_LABEL_LONG_CLIP);
     lv_label_set_text(modifier_status_label, "");
-    lv_obj_align(modifier_status_label, LV_ALIGN_BOTTOM_MID, 0, -4);
+    lv_obj_align(modifier_status_label, LV_ALIGN_CENTER, 0, 32);
     lv_obj_add_flag(modifier_status_label, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(modifier_status_label);
 }
