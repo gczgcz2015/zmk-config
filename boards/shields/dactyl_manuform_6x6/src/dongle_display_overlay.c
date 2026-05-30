@@ -16,7 +16,7 @@
 #include <zmk/events/caps_word_state_changed.h>
 #endif
 
-LV_FONT_DECLARE(CozetteNerdFonts_40);
+LV_FONT_DECLARE(NerdFonts_Regular_40);
 LV_FONT_DECLARE(silkscreen_bold_16);
 
 /* ──────────────────────── Bongo Cat Settings ──────────────────────── */
@@ -67,7 +67,7 @@ enum bongo_cat_frame {
 
 #define MOD_STATUS_TICK_MS  100
 #define MOD_STATUS_W        232
-#define MOD_STATUS_BOTTOM_Y -6
+#define MOD_STATUS_BOTTOM_Y -12
 #define MOD_STATUS_SPACING  2
 #define MOD_SYMBOL_CAPS     "\xf3\xb0\x98\xb2"
 #define MOD_SYMBOL_CTRL     "\xf3\xb0\x98\xb4"
@@ -571,7 +571,7 @@ static void hide_builtin_caps_word_indicator(lv_obj_t *screen) {
 static void create_modifier_status(lv_obj_t *screen) {
     modifier_status_label = lv_label_create(screen);
     lv_obj_set_width(modifier_status_label, MOD_STATUS_W);
-    lv_obj_set_style_text_font(modifier_status_label, &CozetteNerdFonts_40,
+    lv_obj_set_style_text_font(modifier_status_label, &NerdFonts_Regular_40,
                                LV_PART_MAIN);
     lv_obj_set_style_text_color(modifier_status_label, lv_color_white(),
                                 LV_PART_MAIN);

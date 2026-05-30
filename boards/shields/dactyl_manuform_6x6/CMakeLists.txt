@@ -4,6 +4,6 @@ if(CONFIG_SHIELD_DACTYL_MANUFORM_6X6_DONGLE)
     src/bongo_cat_art.c
     src/dongle_display_overlay.c
     src/fonts/silkscreen_bold_16.c
-    src/fonts/CozetteNerdFonts_40.c
+    src/fonts/NerdFonts_Regular_40.c
   )
 endif()
