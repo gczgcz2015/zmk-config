@@ -16,7 +16,6 @@
 #include <zmk/events/caps_word_state_changed.h>
 #endif
 
-LV_FONT_DECLARE(NerdFonts_Regular_40);
 LV_FONT_DECLARE(silkscreen_bold_16);
 
 /* ──────────────────────── Bongo Cat Settings ──────────────────────── */
@@ -67,13 +66,89 @@ enum bongo_cat_frame {
 
 #define MOD_STATUS_TICK_MS  100
 #define MOD_STATUS_W        232
-#define MOD_STATUS_BOTTOM_Y -12
+#define MOD_STATUS_BOTTOM_Y -42
 #define MOD_STATUS_SPACING  2
-#define MOD_SYMBOL_CAPS     "\xf3\xb0\x98\xb2"
-#define MOD_SYMBOL_CTRL     "\xf3\xb0\x98\xb4"
-#define MOD_SYMBOL_SHIFT    "\xf3\xb0\x98\xb6"
-#define MOD_SYMBOL_ALT      "\xf3\xb0\x98\xb5"
-#define MOD_SYMBOL_WIN      "\xee\x98\xaa"
+
+// 13x13 custom pixel-art modifier icons
+static const uint8_t caps_symbol_map[] = {
+    0x02, 0x00, 0x07, 0x00, 0x0F, 0x80, 0x1F, 0xC0,
+    0x3F, 0xE0, 0x7F, 0xF0, 0x1F, 0xC0, 0x00, 0x00,
+    0x7F, 0xF0, 0x7F, 0xF0, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00
+};
+static const lv_img_dsc_t caps_symbol_img = {
+    .header.cf = LV_IMG_CF_ALPHA_1BIT,
+    .header.always_zero = 0,
+    .header.reserved = 0,
+    .header.w = 13,
+    .header.h = 13,
+    .data_size = sizeof(caps_symbol_map),
+    .data = caps_symbol_map,
+};
+
+static const uint8_t ctrl_symbol_map[] = {
+    0x02, 0x00, 0x07, 0x00, 0x0D, 0x80, 0x18, 0xC0,
+    0x30, 0x60, 0x60, 0x30, 0xFF, 0xF8, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00
+};
+static const lv_img_dsc_t ctrl_symbol_img = {
+    .header.cf = LV_IMG_CF_ALPHA_1BIT,
+    .header.always_zero = 0,
+    .header.reserved = 0,
+    .header.w = 13,
+    .header.h = 13,
+    .data_size = sizeof(ctrl_symbol_map),
+    .data = ctrl_symbol_map,
+};
+
+static const uint8_t shift_symbol_map[] = {
+    0x02, 0x00, 0x07, 0x00, 0x0F, 0x80, 0x1F, 0xC0,
+    0x3F, 0xE0, 0x7F, 0xF0, 0x1F, 0xC0, 0x1F, 0xC0,
+    0x1F, 0xC0, 0x1F, 0xC0, 0x1F, 0xC0, 0x1F, 0xC0,
+    0x00, 0x00
+};
+static const lv_img_dsc_t shift_symbol_img = {
+    .header.cf = LV_IMG_CF_ALPHA_1BIT,
+    .header.always_zero = 0,
+    .header.reserved = 0,
+    .header.w = 13,
+    .header.h = 13,
+    .data_size = sizeof(shift_symbol_map),
+    .data = shift_symbol_map,
+};
+
+static const uint8_t alt_symbol_map[] = {
+    0x00, 0x00, 0xF0, 0x00, 0x1C, 0x00, 0x07, 0x00,
+    0x01, 0xC0, 0x00, 0x78, 0x00, 0x00, 0x7F, 0xF0,
+    0x7F, 0xF0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00
+};
+static const lv_img_dsc_t alt_symbol_img = {
+    .header.cf = LV_IMG_CF_ALPHA_1BIT,
+    .header.always_zero = 0,
+    .header.reserved = 0,
+    .header.w = 13,
+    .header.h = 13,
+    .data_size = sizeof(alt_symbol_map),
+    .data = alt_symbol_map,
+};
+
+static const uint8_t win_symbol_map[] = {
+    0x00, 0x00, 0x38, 0xE0, 0x6D, 0xB0, 0x6D, 0xB0,
+    0x3F, 0xE0, 0x08, 0x80, 0x3F, 0xE0, 0x6D, 0xB0,
+    0x6D, 0xB0, 0x38, 0xE0, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00
+};
+static const lv_img_dsc_t win_symbol_img = {
+    .header.cf = LV_IMG_CF_ALPHA_1BIT,
+    .header.always_zero = 0,
+    .header.reserved = 0,
+    .header.w = 13,
+    .header.h = 13,
+    .data_size = sizeof(win_symbol_map),
+    .data = win_symbol_map,
+};
 
 /* ──────────────────────── Layer Status ──────────────────────── */
 
@@ -96,7 +171,8 @@ static lv_obj_t *right_tap_mask;
 static lv_obj_t *layer_roller_obj;
 static lv_obj_t *base_layer_label;
 static lv_obj_t *fn_layer_label;
-static lv_obj_t *modifier_status_label;
+static lv_obj_t *modifier_status_row;
+static lv_obj_t *mod_boxes[5];
 static bool display_overlay_installed;
 static enum bongo_cat_frame pending_bongo_frame = BONGO_CAT_RESTING;
 static uint8_t active_key_count;
@@ -360,51 +436,66 @@ static int calc_kps_x10(void) {
 /*                       Modifier Status                           */
 /* ══════════════════════════════════════════════════════════════════ */
 
-static void append_mod_symbol(char *text, size_t *idx, size_t len,
-                              const char *symbol) {
-    while (*symbol != '\0' && *idx + 1 < len) {
-        text[*idx] = *symbol;
-        (*idx)++;
-        symbol++;
-    }
-}
-
 static void apply_modifier_status(void *unused) {
     ARG_UNUSED(unused);
 
-    if (modifier_status_label == NULL) {
+    if (modifier_status_row == NULL) {
         return;
     }
 
     uint8_t mods = pending_modifier_mask;
-    char text[24];
-    size_t idx = 0;
+    bool any_active = false;
 
+    // Caps Word
+    bool caps_active = false;
 #ifdef CONFIG_ZMK_CAPS_WORD
     if (caps_word_active) {
-        append_mod_symbol(text, &idx, sizeof(text), MOD_SYMBOL_CAPS);
+        caps_active = true;
     }
 #endif
-    if (mods & (MOD_LCTL | MOD_RCTL)) {
-        append_mod_symbol(text, &idx, sizeof(text), MOD_SYMBOL_CTRL);
-    }
-    if (mods & (MOD_LSFT | MOD_RSFT)) {
-        append_mod_symbol(text, &idx, sizeof(text), MOD_SYMBOL_SHIFT);
-    }
-    if (mods & (MOD_LALT | MOD_RALT)) {
-        append_mod_symbol(text, &idx, sizeof(text), MOD_SYMBOL_ALT);
-    }
-    if (mods & (MOD_LGUI | MOD_RGUI)) {
-        append_mod_symbol(text, &idx, sizeof(text), MOD_SYMBOL_WIN);
-    }
-
-    text[idx] = '\0';
-    lv_label_set_text(modifier_status_label, text);
-
-    if (idx == 0) {
-        lv_obj_add_flag(modifier_status_label, LV_OBJ_FLAG_HIDDEN);
+    if (caps_active) {
+        lv_obj_clear_flag(mod_boxes[0], LV_OBJ_FLAG_HIDDEN);
+        any_active = true;
     } else {
-        lv_obj_clear_flag(modifier_status_label, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(mod_boxes[0], LV_OBJ_FLAG_HIDDEN);
+    }
+
+    // Ctrl
+    if (mods & (MOD_LCTL | MOD_RCTL)) {
+        lv_obj_clear_flag(mod_boxes[1], LV_OBJ_FLAG_HIDDEN);
+        any_active = true;
+    } else {
+        lv_obj_add_flag(mod_boxes[1], LV_OBJ_FLAG_HIDDEN);
+    }
+
+    // Shift
+    if (mods & (MOD_LSFT | MOD_RSFT)) {
+        lv_obj_clear_flag(mod_boxes[2], LV_OBJ_FLAG_HIDDEN);
+        any_active = true;
+    } else {
+        lv_obj_add_flag(mod_boxes[2], LV_OBJ_FLAG_HIDDEN);
+    }
+
+    // Alt
+    if (mods & (MOD_LALT | MOD_RALT)) {
+        lv_obj_clear_flag(mod_boxes[3], LV_OBJ_FLAG_HIDDEN);
+        any_active = true;
+    } else {
+        lv_obj_add_flag(mod_boxes[3], LV_OBJ_FLAG_HIDDEN);
+    }
+
+    // Win
+    if (mods & (MOD_LGUI | MOD_RGUI)) {
+        lv_obj_clear_flag(mod_boxes[4], LV_OBJ_FLAG_HIDDEN);
+        any_active = true;
+    } else {
+        lv_obj_add_flag(mod_boxes[4], LV_OBJ_FLAG_HIDDEN);
+    }
+
+    if (any_active) {
+        lv_obj_clear_flag(modifier_status_row, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(modifier_status_row, LV_OBJ_FLAG_HIDDEN);
     }
 }
 
@@ -569,21 +660,63 @@ static void hide_builtin_caps_word_indicator(lv_obj_t *screen) {
 }
 
 static void create_modifier_status(lv_obj_t *screen) {
-    modifier_status_label = lv_label_create(screen);
-    lv_obj_set_width(modifier_status_label, MOD_STATUS_W);
-    lv_obj_set_style_text_font(modifier_status_label, &NerdFonts_Regular_40,
-                               LV_PART_MAIN);
-    lv_obj_set_style_text_color(modifier_status_label, lv_color_white(),
-                                LV_PART_MAIN);
-    lv_obj_set_style_text_align(modifier_status_label, LV_TEXT_ALIGN_CENTER,
-                                LV_PART_MAIN);
-    lv_obj_set_style_text_letter_space(modifier_status_label, MOD_STATUS_SPACING,
-                                       LV_PART_MAIN);
-    lv_label_set_long_mode(modifier_status_label, LV_LABEL_LONG_CLIP);
-    lv_label_set_text(modifier_status_label, "");
-    lv_obj_align(modifier_status_label, LV_ALIGN_BOTTOM_MID, 0, MOD_STATUS_BOTTOM_Y);
-    lv_obj_add_flag(modifier_status_label, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_move_foreground(modifier_status_label);
+    modifier_status_row = lv_obj_create(screen);
+    lv_obj_set_size(modifier_status_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_align(modifier_status_row, LV_ALIGN_BOTTOM_MID, 0, MOD_STATUS_BOTTOM_Y);
+    lv_obj_set_style_bg_opa(modifier_status_row, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(modifier_status_row, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(modifier_status_row, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(modifier_status_row, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_set_layout(modifier_status_row, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(modifier_status_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(modifier_status_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(modifier_status_row, 4, LV_PART_MAIN);
+
+    const lv_img_dsc_t *symbols[] = {
+        &caps_symbol_img,
+        &ctrl_symbol_img,
+        &shift_symbol_img,
+        &alt_symbol_img,
+        &win_symbol_img
+    };
+
+    for (size_t i = 0; i < 5; i++) {
+        // Parent box: solid white background
+        mod_boxes[i] = lv_obj_create(modifier_status_row);
+        lv_obj_set_size(mod_boxes[i], 23, 23);
+        lv_obj_set_style_bg_color(mod_boxes[i], lv_color_white(), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(mod_boxes[i], LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_radius(mod_boxes[i], 0, LV_PART_MAIN);
+        lv_obj_set_style_border_width(mod_boxes[i], 0, LV_PART_MAIN);
+        lv_obj_set_style_pad_all(mod_boxes[i], 0, LV_PART_MAIN);
+        lv_obj_clear_flag(mod_boxes[i], LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+
+        // Inner box: black background with 1px white border, shifted top-left
+        lv_obj_t *inner_box = lv_obj_create(mod_boxes[i]);
+        lv_obj_set_size(inner_box, 21, 21);
+        lv_obj_align(inner_box, LV_ALIGN_TOP_LEFT, 0, 0);
+        lv_obj_set_style_bg_color(inner_box, lv_color_black(), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(inner_box, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_radius(inner_box, 0, LV_PART_MAIN);
+        lv_obj_set_style_border_width(inner_box, 1, LV_PART_MAIN);
+        lv_obj_set_style_border_color(inner_box, lv_color_white(), LV_PART_MAIN);
+        lv_obj_set_style_pad_all(inner_box, 0, LV_PART_MAIN);
+        lv_obj_clear_flag(inner_box, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+
+        // Icon image inside inner box
+        lv_obj_t *img = lv_img_create(inner_box);
+        lv_img_set_src(img, symbols[i]);
+        lv_obj_align(img, LV_ALIGN_CENTER, 0, 0);
+        lv_obj_set_style_img_recolor(img, lv_color_white(), LV_PART_MAIN);
+        lv_obj_set_style_img_recolor_opa(img, LV_OPA_COVER, LV_PART_MAIN);
+
+        // Initially hidden
+        lv_obj_add_flag(mod_boxes[i], LV_OBJ_FLAG_HIDDEN);
+    }
+
+    lv_obj_add_flag(modifier_status_row, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(modifier_status_row);
 }
 
 static void create_layer_status(lv_obj_t *screen) {
@@ -658,9 +791,11 @@ static void install_display_overlay(void *unused) {
 
     hide_layer_roller(screen);
     hide_builtin_caps_word_indicator(screen);
+
     create_bongo_cat(screen);
     create_layer_status(screen);
     create_modifier_status(screen);
+
     display_overlay_installed = true;
 
     k_work_reschedule(&modifier_status_work, K_NO_WAIT);
