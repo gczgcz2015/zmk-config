@@ -49,7 +49,7 @@ enum bongo_cat_frame {
 #define CAT_X_OFFSET        0
 #define CAT_Y_OFFSET        8
 #define CAT_CONTAINER_X     0
-#define CAT_CONTAINER_Y     0
+#define CAT_CONTAINER_Y     -5
 #define CAT_IMAGE_W         204
 #define CAT_IMAGE_H         120
 #define BONGO_RIGHT_FIRST_POSITION 31
@@ -66,7 +66,7 @@ enum bongo_cat_frame {
 
 #define MOD_STATUS_TICK_MS  100
 #define MOD_STATUS_W        232
-#define MOD_STATUS_BOTTOM_Y -14
+#define MOD_STATUS_BOTTOM_Y -24
 #define MOD_STATUS_SPACING  2
 #define MOD_SYMBOL_CAPS     "\xf3\xb0\x98\xb2"
 #define MOD_SYMBOL_CTRL     "\xf3\xb0\x98\xb4"
