@@ -66,6 +66,7 @@ enum bongo_cat_frame {
 
 #define MOD_STATUS_TICK_MS  100
 #define MOD_STATUS_W        232
+#define MOD_STATUS_BOTTOM_Y -14
 #define MOD_STATUS_SPACING  2
 #define MOD_SYMBOL_CAPS     "\xf3\xb0\x98\xb2"
 #define MOD_SYMBOL_CTRL     "\xf3\xb0\x98\xb4"
@@ -541,7 +542,7 @@ static void create_modifier_status(lv_obj_t *screen) {
                                        LV_PART_MAIN);
     lv_label_set_long_mode(modifier_status_label, LV_LABEL_LONG_CLIP);
     lv_label_set_text(modifier_status_label, "");
-    lv_obj_align(modifier_status_label, LV_ALIGN_CENTER, 0, 14);
+    lv_obj_align(modifier_status_label, LV_ALIGN_BOTTOM_MID, 0, MOD_STATUS_BOTTOM_Y);
     lv_obj_add_flag(modifier_status_label, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(modifier_status_label);
 }
