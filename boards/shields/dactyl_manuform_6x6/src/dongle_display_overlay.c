@@ -16,7 +16,8 @@
 #include <zmk/events/caps_word_state_changed.h>
 #endif
 
-LV_FONT_DECLARE(NerdFonts_Regular_40);
+LV_FONT_DECLARE(CozetteNerdFonts_40);
+LV_FONT_DECLARE(silkscreen_bold_16);
 
 /* ──────────────────────── Bongo Cat Settings ──────────────────────── */
 
@@ -49,7 +50,7 @@ enum bongo_cat_frame {
 #define CAT_X_OFFSET        0
 #define CAT_Y_OFFSET        8
 #define CAT_CONTAINER_X     0
-#define CAT_CONTAINER_Y     -5
+#define CAT_CONTAINER_Y     -12
 #define CAT_IMAGE_W         204
 #define CAT_IMAGE_H         120
 #define BONGO_RIGHT_FIRST_POSITION 31
@@ -66,7 +67,7 @@ enum bongo_cat_frame {
 
 #define MOD_STATUS_TICK_MS  100
 #define MOD_STATUS_W        232
-#define MOD_STATUS_BOTTOM_Y -24
+#define MOD_STATUS_BOTTOM_Y -6
 #define MOD_STATUS_SPACING  2
 #define MOD_SYMBOL_CAPS     "\xf3\xb0\x98\xb2"
 #define MOD_SYMBOL_CTRL     "\xf3\xb0\x98\xb4"
@@ -93,7 +94,8 @@ static lv_obj_t *cat_container;
 static lv_obj_t *left_tap_mask;
 static lv_obj_t *right_tap_mask;
 static lv_obj_t *layer_roller_obj;
-static lv_obj_t *layer_status_label;
+static lv_obj_t *base_layer_label;
+static lv_obj_t *fn_layer_label;
 static lv_obj_t *modifier_status_label;
 static bool display_overlay_installed;
 static enum bongo_cat_frame pending_bongo_frame = BONGO_CAT_RESTING;
@@ -488,21 +490,58 @@ static void modifier_status_work_handler(struct k_work *work) {
 /*                       Layer Status                              */
 /* ══════════════════════════════════════════════════════════════════ */
 
+static void active_label_slide_anim_cb(void *var, int32_t val) {
+    lv_obj_t *label = (lv_obj_t *)var;
+    int32_t y_pos = (label == fn_layer_label) ? 28 : 8;
+    lv_obj_align(label, LV_ALIGN_TOP_RIGHT, -10 + val, y_pos);
+}
+
+static void trigger_slide_in(lv_obj_t *label) {
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, label);
+    lv_anim_set_values(&a, 60, 0);                 // Slide in from +60px right
+    lv_anim_set_time(&a, 250);                     // 250ms duration (springy overshoot)
+    lv_anim_set_exec_cb(&a, active_label_slide_anim_cb);
+    lv_anim_set_path_cb(&a, lv_anim_path_overshoot); // Use LVGL's built-in spring overshoot curve!
+    lv_anim_start(&a);
+}
+
 static void apply_layer_status(void *unused) {
     ARG_UNUSED(unused);
 
-    if (layer_status_label == NULL) {
+    if (base_layer_label == NULL || fn_layer_label == NULL) {
         return;
     }
 
     uint8_t layer = zmk_keymap_highest_layer_active();
 
     if (layer == LAYER_FN_INDEX) {
-        lv_label_set_text(layer_status_label,
-                          "  #606060 BASE#\n> #ffffff FN#");
+        // BASE layer inactive: transparent background, gray text
+        lv_obj_set_style_bg_opa(base_layer_label, LV_OPA_TRANSP, LV_PART_MAIN);
+        lv_obj_set_style_text_color(base_layer_label, lv_color_hex(0x606060), LV_PART_MAIN);
+        lv_label_set_text(base_layer_label, "  BASE");
+
+        // FN layer active: red background, white text
+        lv_obj_set_style_bg_color(fn_layer_label, lv_color_hex(0xC63939), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(fn_layer_label, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_text_color(fn_layer_label, lv_color_white(), LV_PART_MAIN);
+        lv_label_set_text(fn_layer_label, "> FN ");
+
+        trigger_slide_in(fn_layer_label);
     } else {
-        lv_label_set_text(layer_status_label,
-                          "> #ffffff BASE#\n  #606060 FN#");
+        // BASE layer active: blue background, white text
+        lv_obj_set_style_bg_color(base_layer_label, lv_color_hex(0x2B5C8F), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(base_layer_label, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_text_color(base_layer_label, lv_color_white(), LV_PART_MAIN);
+        lv_label_set_text(base_layer_label, "> BASE ");
+
+        // FN layer inactive: transparent background, gray text
+        lv_obj_set_style_bg_opa(fn_layer_label, LV_OPA_TRANSP, LV_PART_MAIN);
+        lv_obj_set_style_text_color(fn_layer_label, lv_color_hex(0x606060), LV_PART_MAIN);
+        lv_label_set_text(fn_layer_label, "  FN");
+
+        trigger_slide_in(base_layer_label);
     }
 }
 
@@ -532,7 +571,7 @@ static void hide_builtin_caps_word_indicator(lv_obj_t *screen) {
 static void create_modifier_status(lv_obj_t *screen) {
     modifier_status_label = lv_label_create(screen);
     lv_obj_set_width(modifier_status_label, MOD_STATUS_W);
-    lv_obj_set_style_text_font(modifier_status_label, &NerdFonts_Regular_40,
+    lv_obj_set_style_text_font(modifier_status_label, &CozetteNerdFonts_40,
                                LV_PART_MAIN);
     lv_obj_set_style_text_color(modifier_status_label, lv_color_white(),
                                 LV_PART_MAIN);
@@ -548,19 +587,29 @@ static void create_modifier_status(lv_obj_t *screen) {
 }
 
 static void create_layer_status(lv_obj_t *screen) {
-    layer_status_label = lv_label_create(screen);
-    lv_obj_set_width(layer_status_label, LAYER_STATUS_W);
-    lv_obj_set_style_text_font(layer_status_label, LV_FONT_DEFAULT,
-                               LV_PART_MAIN);
-    lv_obj_set_style_text_color(layer_status_label, lv_color_white(),
-                                LV_PART_MAIN);
-    lv_obj_set_style_text_align(layer_status_label, LV_TEXT_ALIGN_RIGHT,
-                                LV_PART_MAIN);
-    lv_label_set_recolor(layer_status_label, true);
-    lv_label_set_long_mode(layer_status_label, LV_LABEL_LONG_CLIP);
-    lv_obj_align(layer_status_label, LV_ALIGN_TOP_RIGHT, -10, 8);
+    // Create BASE layer label
+    base_layer_label = lv_label_create(screen);
+    lv_obj_set_style_text_font(base_layer_label, &silkscreen_bold_16, LV_PART_MAIN);
+    lv_obj_set_style_radius(base_layer_label, 3, LV_PART_MAIN);
+    lv_obj_set_style_pad_left(base_layer_label, 6, LV_PART_MAIN);
+    lv_obj_set_style_pad_right(base_layer_label, 6, LV_PART_MAIN);
+    lv_obj_set_style_pad_top(base_layer_label, 1, LV_PART_MAIN);
+    lv_obj_set_style_pad_bottom(base_layer_label, 1, LV_PART_MAIN);
+    lv_obj_align(base_layer_label, LV_ALIGN_TOP_RIGHT, -10, 8);
+
+    // Create FN layer label
+    fn_layer_label = lv_label_create(screen);
+    lv_obj_set_style_text_font(fn_layer_label, &silkscreen_bold_16, LV_PART_MAIN);
+    lv_obj_set_style_radius(fn_layer_label, 3, LV_PART_MAIN);
+    lv_obj_set_style_pad_left(fn_layer_label, 6, LV_PART_MAIN);
+    lv_obj_set_style_pad_right(fn_layer_label, 6, LV_PART_MAIN);
+    lv_obj_set_style_pad_top(fn_layer_label, 1, LV_PART_MAIN);
+    lv_obj_set_style_pad_bottom(fn_layer_label, 1, LV_PART_MAIN);
+    lv_obj_align(fn_layer_label, LV_ALIGN_TOP_RIGHT, -10, 28); // 8 + 16 + 4
+
     apply_layer_status(NULL);
-    lv_obj_move_foreground(layer_status_label);
+    lv_obj_move_foreground(base_layer_label);
+    lv_obj_move_foreground(fn_layer_label);
 }
 
 static void create_bongo_cat(lv_obj_t *screen) {
