@@ -16,7 +16,7 @@
 #include <zmk/events/caps_word_state_changed.h>
 #endif
 
-LV_FONT_DECLARE(NerdFonts_Regular_20);
+LV_FONT_DECLARE(NerdFonts_Regular_40);
 
 /* ──────────────────────── Bongo Cat Settings ──────────────────────── */
 
@@ -65,9 +65,8 @@ enum bongo_cat_frame {
 /* ──────────────────────── Modifier Status ──────────────────────── */
 
 #define MOD_STATUS_TICK_MS  100
-#define MOD_STATUS_W        156
-#define MOD_STATUS_ZOOM     320
-#define MOD_STATUS_SPACING  6
+#define MOD_STATUS_W        232
+#define MOD_STATUS_SPACING  2
 #define MOD_SYMBOL_CAPS     "\xf3\xb0\x98\xb2"
 #define MOD_SYMBOL_CTRL     "\xf3\xb0\x98\xb4"
 #define MOD_SYMBOL_SHIFT    "\xf3\xb0\x98\xb6"
@@ -532,7 +531,7 @@ static void hide_builtin_caps_word_indicator(lv_obj_t *screen) {
 static void create_modifier_status(lv_obj_t *screen) {
     modifier_status_label = lv_label_create(screen);
     lv_obj_set_width(modifier_status_label, MOD_STATUS_W);
-    lv_obj_set_style_text_font(modifier_status_label, &NerdFonts_Regular_20,
+    lv_obj_set_style_text_font(modifier_status_label, &NerdFonts_Regular_40,
                                LV_PART_MAIN);
     lv_obj_set_style_text_color(modifier_status_label, lv_color_white(),
                                 LV_PART_MAIN);
@@ -540,11 +539,9 @@ static void create_modifier_status(lv_obj_t *screen) {
                                 LV_PART_MAIN);
     lv_obj_set_style_text_letter_space(modifier_status_label, MOD_STATUS_SPACING,
                                        LV_PART_MAIN);
-    lv_obj_set_style_transform_zoom(modifier_status_label, MOD_STATUS_ZOOM,
-                                    LV_PART_MAIN);
     lv_label_set_long_mode(modifier_status_label, LV_LABEL_LONG_CLIP);
     lv_label_set_text(modifier_status_label, "");
-    lv_obj_align(modifier_status_label, LV_ALIGN_CENTER, 0, 32);
+    lv_obj_align(modifier_status_label, LV_ALIGN_CENTER, 0, 14);
     lv_obj_add_flag(modifier_status_label, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(modifier_status_label);
 }
