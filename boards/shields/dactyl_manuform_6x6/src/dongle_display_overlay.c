@@ -659,6 +659,46 @@ static void hide_builtin_caps_word_indicator(lv_obj_t *screen) {
     lv_obj_add_flag(lv_obj_get_child(screen, 0), LV_OBJ_FLAG_HIDDEN);
 }
 
+static bool style_battery_number_container(lv_obj_t *battery_widget) {
+    uint32_t info_count = lv_obj_get_child_cnt(battery_widget);
+
+    if (info_count == 0) {
+        return false;
+    }
+
+    for (uint32_t i = 0; i < info_count; i++) {
+        lv_obj_t *info_container = lv_obj_get_child(battery_widget, i);
+        if (lv_obj_get_child_cnt(info_container) < 4) {
+            return false;
+        }
+    }
+
+    for (uint32_t i = 0; i < info_count; i++) {
+        lv_obj_t *info_container = lv_obj_get_child(battery_widget, i);
+        lv_obj_t *num = lv_obj_get_child(info_container, 1);
+
+        lv_obj_set_style_text_font(num, &silkscreen_bold_16, LV_PART_MAIN);
+    }
+
+    return true;
+}
+
+static void style_builtin_battery_numbers(lv_obj_t *screen) {
+    uint32_t child_count = lv_obj_get_child_cnt(screen);
+
+    for (uint32_t i = 0; i < child_count; i++) {
+        lv_obj_t *child = lv_obj_get_child(screen, i);
+
+        if (child == layer_roller_obj) {
+            continue;
+        }
+
+        if (style_battery_number_container(child)) {
+            return;
+        }
+    }
+}
+
 static void create_modifier_status(lv_obj_t *screen) {
     modifier_status_row = lv_obj_create(screen);
     lv_obj_set_size(modifier_status_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
@@ -791,6 +831,7 @@ static void install_display_overlay(void *unused) {
 
     hide_layer_roller(screen);
     hide_builtin_caps_word_indicator(screen);
+    style_builtin_battery_numbers(screen);
 
     create_bongo_cat(screen);
     create_layer_status(screen);
