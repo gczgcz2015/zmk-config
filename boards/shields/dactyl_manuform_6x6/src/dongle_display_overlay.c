@@ -62,6 +62,106 @@ enum bongo_cat_frame {
 #define RIGHT_TAP_MASK_W    31
 #define RIGHT_TAP_MASK_H    12
 
+/* ──────────────────────── Lightweight CRT Styling ──────────────────────── */
+
+#define CRT_BG_COLOR        0x0D1212
+#define CRT_EDGE_COLOR      0x030707
+#define CRT_EDGE_SOFT_COLOR 0x080C0C
+#define CRT_GLITCH_PHASES   6
+#define CRT_GLITCH_PIXELS   7
+
+struct crt_rect_spec {
+    int16_t x;
+    int16_t y;
+    int16_t w;
+    int16_t h;
+    uint32_t color;
+};
+
+static const struct crt_rect_spec crt_noise_pixels[] = {
+    { 81,  33, 1, 1, 0x222E2D},
+    { 24,  40, 1, 1, 0x3A4440},
+    {221, 112, 1, 1, 0x192222},
+    { 54,  39, 1, 1, 0x2A3734},
+    { 26, 101, 1, 1, 0x222E2D},
+    { 21,  92, 1, 1, 0x192222},
+    { 97,   9, 1, 1, 0x192222},
+    { 72,  25, 1, 1, 0x3A4440},
+    {216,  75, 1, 1, 0x2A3734},
+    { 33,  58, 1, 1, 0x3A4440},
+    {199, 109, 1, 1, 0x222E2D},
+    {206,  95, 1, 1, 0x222E2D},
+    { 51,  66, 1, 1, 0x2A3734},
+    { 21,  30, 1, 1, 0x222E2D},
+    { 46,  52, 1, 1, 0x192222},
+    { 24,  47, 1, 1, 0x192222},
+    {231, 112, 1, 1, 0x192222},
+    { 98,   9, 1, 1, 0x3A4440},
+    { 48, 108, 1, 1, 0x3A4440},
+    { 53,  69, 1, 1, 0x3A4440},
+    {140,  15, 1, 1, 0x2A3734},
+    { 51,  34, 1, 1, 0x192222},
+    { 85,  40, 1, 1, 0x222E2D},
+    {126,  44, 1, 1, 0x222E2D},
+};
+
+static const struct crt_rect_spec crt_glitch_specs[CRT_GLITCH_PHASES][CRT_GLITCH_PIXELS] = {
+    {
+        { 58,  75, 5, 1, 0x41544E},
+        { 87,  59, 4, 1, 0x5C6860},
+        {126,  86, 6, 1, 0x2E413D},
+        {151,  77, 2, 2, 0x506058},
+        { 44,  72, 5, 1, 0x20302D},
+        {132,  83, 2, 1, 0x503844},
+        { 92,  64, 2, 2, 0x2E413D},
+    },
+    {
+        { 66,  81, 3, 1, 0x5C6860},
+        { 80,  64, 6, 1, 0x2E413D},
+        {119,  81, 5, 1, 0x41544E},
+        {158,  74, 4, 1, 0x20302D},
+        { 52,  69, 2, 2, 0x2E413D},
+        {145,  80, 6, 1, 0x503844},
+        { 72,  77, 2, 1, 0x41544E},
+    },
+    {
+        { 63,  73, 6, 1, 0x20302D},
+        { 93,  66, 3, 1, 0x41544E},
+        {129,  82, 2, 2, 0x5C6860},
+        {154,  80, 5, 1, 0x2E413D},
+        { 47,  74, 4, 1, 0x41544E},
+        {137,  86, 3, 1, 0x20302D},
+        { 82,  59, 2, 1, 0x503844},
+    },
+    {
+        { 70,  77, 2, 2, 0x2E413D},
+        { 84,  61, 5, 1, 0x41544E},
+        {123,  87, 4, 1, 0x20302D},
+        {149,  75, 7, 1, 0x5C6860},
+        { 39,  73, 4, 1, 0x2E413D},
+        {130,  82, 2, 1, 0x503844},
+        { 96,  65, 3, 1, 0x41544E},
+    },
+    {
+        { 56,  80, 4, 1, 0x41544E},
+        { 90,  58, 3, 1, 0x20302D},
+        {134,  84, 6, 1, 0x5C6860},
+        {160,  79, 2, 2, 0x2E413D},
+        { 50,  70, 6, 1, 0x20302D},
+        {144,  76, 2, 1, 0x503844},
+        { 76,  63, 2, 2, 0x41544E},
+    },
+    {
+        { 61,  76, 7, 1, 0x2E413D},
+        { 95,  63, 2, 2, 0x5C6860},
+        {121,  83, 5, 1, 0x41544E},
+        {153,  81, 4, 1, 0x20302D},
+        { 43,  71, 3, 1, 0x41544E},
+        {136,  87, 2, 1, 0x503844},
+        { 88,  67, 3, 1, 0x2E413D},
+    },
+};
+
 /* ──────────────────────── Modifier Status ──────────────────────── */
 
 #define MOD_STATUS_TICK_MS  100
@@ -168,6 +268,7 @@ static lv_obj_t *bongo_cat_img;
 static lv_obj_t *cat_container;
 static lv_obj_t *left_tap_mask;
 static lv_obj_t *right_tap_mask;
+static lv_obj_t *crt_glitch_pixels[CRT_GLITCH_PIXELS];
 static lv_obj_t *layer_roller_obj;
 static lv_obj_t *base_layer_label;
 static lv_obj_t *fn_layer_label;
@@ -177,6 +278,7 @@ static bool display_overlay_installed;
 static enum bongo_cat_frame pending_bongo_frame = BONGO_CAT_RESTING;
 static uint8_t active_key_count;
 static bool busy_tick_running;
+static uint8_t crt_glitch_phase;
 static uint8_t busy_phase;
 static enum bongo_cat_frame pending_down_frame = BONGO_CAT_LEFT_DOWN;
 static uint8_t active_modifier_counts[8];
@@ -286,6 +388,58 @@ static void apply_tap_masks(enum bongo_cat_frame frame, int16_t frame_x,
     }
 }
 
+static uint8_t glitch_pixel_count_for_frame(enum bongo_cat_frame frame) {
+    switch (frame) {
+    case BONGO_CAT_LEFT_UP:
+    case BONGO_CAT_RIGHT_UP:
+        return 4;
+    case BONGO_CAT_LEFT_DOWN:
+    case BONGO_CAT_RIGHT_DOWN:
+        return 5;
+    case BONGO_CAT_BUSY:
+    case BONGO_CAT_BOTH:
+        return CRT_GLITCH_PIXELS;
+    case BONGO_CAT_RESTING:
+    default:
+        return 0;
+    }
+}
+
+static void apply_crt_glitch(enum bongo_cat_frame frame) {
+    uint8_t visible_count = glitch_pixel_count_for_frame(frame);
+
+    if (crt_glitch_pixels[0] == NULL) {
+        return;
+    }
+
+    if (visible_count == 0) {
+        for (size_t i = 0; i < CRT_GLITCH_PIXELS; i++) {
+            lv_obj_add_flag(crt_glitch_pixels[i], LV_OBJ_FLAG_HIDDEN);
+        }
+        return;
+    }
+
+    const struct crt_rect_spec *phase_specs =
+        crt_glitch_specs[crt_glitch_phase % CRT_GLITCH_PHASES];
+    crt_glitch_phase++;
+
+    for (size_t i = 0; i < CRT_GLITCH_PIXELS; i++) {
+        lv_obj_t *pixel = crt_glitch_pixels[i];
+        if (i >= visible_count || pixel == NULL) {
+            if (pixel != NULL) {
+                lv_obj_add_flag(pixel, LV_OBJ_FLAG_HIDDEN);
+            }
+            continue;
+        }
+
+        const struct crt_rect_spec *spec = &phase_specs[i];
+        lv_obj_set_pos(pixel, spec->x, spec->y);
+        lv_obj_set_size(pixel, spec->w, spec->h);
+        lv_obj_set_style_bg_color(pixel, lv_color_hex(spec->color), LV_PART_MAIN);
+        lv_obj_clear_flag(pixel, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 static void apply_bongo_frame(void *unused) {
     ARG_UNUSED(unused);
 
@@ -300,6 +454,7 @@ static void apply_bongo_frame(void *unused) {
     bongo_frame_offset(pending_bongo_frame, &x, &y);
     lv_obj_align(bongo_cat_img, LV_ALIGN_CENTER, x, y);
     apply_tap_masks(pending_bongo_frame, x, y);
+    apply_crt_glitch(pending_bongo_frame);
 }
 
 static void bongo_frame_work_handler(struct k_work *work) {
@@ -659,6 +814,51 @@ static void hide_builtin_caps_word_indicator(lv_obj_t *screen) {
     lv_obj_add_flag(lv_obj_get_child(screen, 0), LV_OBJ_FLAG_HIDDEN);
 }
 
+static lv_obj_t *create_crt_rect(lv_obj_t *parent, const struct crt_rect_spec *spec) {
+    lv_obj_t *obj = lv_obj_create(parent);
+    lv_obj_set_pos(obj, spec->x, spec->y);
+    lv_obj_set_size(obj, spec->w, spec->h);
+    lv_obj_set_style_bg_color(obj, lv_color_hex(spec->color), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(obj, 0, LV_PART_MAIN);
+    lv_obj_set_style_radius(obj, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(obj, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    return obj;
+}
+
+static void create_crt_static_effects(lv_obj_t *screen) {
+    static const struct crt_rect_spec edge_rects[] = {
+        {  0,   0, 240,   2, CRT_EDGE_COLOR},
+        {  0, 133, 240,   2, CRT_EDGE_COLOR},
+        {  0,   0,   2, 135, CRT_EDGE_COLOR},
+        {238,   0,   2, 135, CRT_EDGE_COLOR},
+        {  2,   2, 236,   3, CRT_EDGE_SOFT_COLOR},
+        {  2, 130, 236,   3, CRT_EDGE_SOFT_COLOR},
+        {  2,   2,   3, 131, CRT_EDGE_SOFT_COLOR},
+        {235,   2,   3, 131, CRT_EDGE_SOFT_COLOR},
+    };
+
+    lv_obj_set_style_bg_color(screen, lv_color_hex(CRT_BG_COLOR), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, LV_PART_MAIN);
+
+    for (size_t i = 0; i < sizeof(crt_noise_pixels) / sizeof(crt_noise_pixels[0]); i++) {
+        create_crt_rect(screen, &crt_noise_pixels[i]);
+    }
+    for (size_t i = 0; i < sizeof(edge_rects) / sizeof(edge_rects[0]); i++) {
+        create_crt_rect(screen, &edge_rects[i]);
+    }
+}
+
+static void create_crt_glitch(lv_obj_t *screen) {
+    const struct crt_rect_spec init = {0, 0, 1, 1, 0x2E413D};
+
+    for (size_t i = 0; i < CRT_GLITCH_PIXELS; i++) {
+        crt_glitch_pixels[i] = create_crt_rect(screen, &init);
+        lv_obj_add_flag(crt_glitch_pixels[i], LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 static void create_modifier_status(lv_obj_t *screen) {
     modifier_status_row = lv_obj_create(screen);
     lv_obj_set_size(modifier_status_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
@@ -763,7 +963,7 @@ static void create_bongo_cat(lv_obj_t *screen) {
     lv_obj_t *masks[] = {left_tap_mask, right_tap_mask};
     for (size_t i = 0; i < 2; i++) {
         lv_obj_clear_flag(masks[i], LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_set_style_bg_color(masks[i], lv_color_black(), LV_PART_MAIN);
+        lv_obj_set_style_bg_color(masks[i], lv_color_hex(CRT_BG_COLOR), LV_PART_MAIN);
         lv_obj_set_style_bg_opa(masks[i], LV_OPA_COVER, LV_PART_MAIN);
         lv_obj_set_style_border_width(masks[i], 0, LV_PART_MAIN);
         lv_obj_set_style_pad_all(masks[i], 0, LV_PART_MAIN);
@@ -792,7 +992,9 @@ static void install_display_overlay(void *unused) {
     hide_layer_roller(screen);
     hide_builtin_caps_word_indicator(screen);
 
+    create_crt_static_effects(screen);
     create_bongo_cat(screen);
+    create_crt_glitch(screen);
     create_layer_status(screen);
     create_modifier_status(screen);
 
