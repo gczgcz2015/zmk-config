@@ -66,7 +66,7 @@ enum bongo_cat_frame {
 
 #define MOD_STATUS_TICK_MS  100
 #define MOD_STATUS_W        232
-#define MOD_STATUS_BOTTOM_Y -42
+#define MOD_STATUS_BOTTOM_Y -45
 #define MOD_STATUS_SPACING  2
 
 // 13x13 custom pixel-art modifier icons
