@@ -18,6 +18,8 @@
 #endif
 
 LV_FONT_DECLARE(silkscreen_bold_16);
+LV_FONT_DECLARE(silkscreen_regular_14);
+LV_FONT_DECLARE(silkscreen_regular_16);
 
 /* ──────────────────────── Bongo Cat Settings ──────────────────────── */
 
@@ -214,6 +216,7 @@ static uint8_t battery_levels[BATTERY_SLOT_COUNT];
 static bool battery_level_known[BATTERY_SLOT_COUNT];
 static bool battery_connected[BATTERY_SLOT_COUNT];
 static struct k_spinlock battery_lock;
+static lv_obj_t *wps_label;
 
 /* ══════════════════════════════════════════════════════════════════ */
 /*                       Bongo Cat Animation                        */
@@ -613,6 +616,13 @@ static void modifier_status_work_handler(struct k_work *work) {
                    zmk_hid_get_keyboard_report()->body.modifiers;
     set_modifier_status_mask(mods);
 
+    if (wps_label != NULL) {
+        int kps_x10 = calc_kps_x10();
+        // WPS (Words Per Second) * 10 = kps_x10 / 5
+        int wps_val = kps_x10 / 5;
+        lv_label_set_text_fmt(wps_label, "WPS:%03d", wps_val);
+    }
+
     k_work_reschedule(&modifier_status_work, K_MSEC(MOD_STATUS_TICK_MS));
 }
 
@@ -717,7 +727,7 @@ static void apply_battery_status(void *unused) {
 
             if (known[i]) {
                 lv_bar_set_value(slot->bar, levels[i], LV_ANIM_ON);
-                lv_label_set_text_fmt(slot->num, "%d%%", levels[i]);
+                lv_label_set_text_fmt(slot->num, "%d", levels[i]);
 
                 // Level-based status colors
                 if (levels[i] > 50) {
@@ -764,24 +774,21 @@ static void create_battery_status(lv_obj_t *screen) {
     lv_obj_set_size(battery_status_row, lv_pct(100), BATTERY_STATUS_H);
     lv_obj_align(battery_status_row, LV_ALIGN_BOTTOM_MID, 0, 0);
     clear_obj_style(battery_status_row);
-    lv_obj_set_layout(battery_status_row, LV_LAYOUT_FLEX);
-    lv_obj_set_flex_flow(battery_status_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(battery_status_row, LV_FLEX_ALIGN_SPACE_EVENLY,
-                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(battery_status_row, BATTERY_ROW_GAP, LV_PART_MAIN);
-    lv_obj_set_style_pad_hor(battery_status_row, BATTERY_ROW_PAD_X, LV_PART_MAIN);
-    lv_obj_set_style_pad_bottom(battery_status_row, BATTERY_ROW_PAD_B, LV_PART_MAIN);
+
+    // Left battery slots (16px font size, visual height 10px, aligned at bottom y = 123)
+    // Relative position in 48px row: y_pos_16 = 113 - 87 = 26
+    int y_pos_16 = 26;
 
     for (size_t i = 0; i < BATTERY_SLOT_COUNT; i++) {
         lv_obj_t *slot = lv_obj_create(battery_status_row);
         clear_obj_style(slot);
-        lv_obj_set_height(slot, lv_pct(100));
-        lv_obj_set_flex_grow(slot, 1);
+        lv_obj_set_size(slot, LV_SIZE_CONTENT, 10);
+        lv_obj_set_pos(slot, 18 + i * 60, y_pos_16);
 
         // Align child widgets horizontally inside the slot
         lv_obj_set_layout(slot, LV_LAYOUT_FLEX);
         lv_obj_set_flex_flow(slot, LV_FLEX_FLOW_ROW);
-        lv_obj_set_flex_align(slot, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_flex_align(slot, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
         lv_obj_set_style_pad_column(slot, 6, LV_PART_MAIN);
 
         // Custom pixel-art battery icon container (width 22, height 10)
@@ -824,14 +831,25 @@ static void create_battery_status(lv_obj_t *screen) {
         lv_bar_set_range(battery_slots[i].bar, 0, 100);
         lv_bar_set_value(battery_slots[i].bar, 0, LV_ANIM_OFF);
 
-        // Percentage text label (silkscreen_bold_16)
+        // Percentage text label (silkscreen_regular_16)
         battery_slots[i].num = lv_label_create(slot);
-        lv_obj_set_style_text_font(battery_slots[i].num, &silkscreen_bold_16,
+        lv_obj_set_style_text_font(battery_slots[i].num, &silkscreen_regular_16,
                                    LV_PART_MAIN);
         lv_obj_set_style_text_color(battery_slots[i].num, lv_color_white(),
                                     LV_PART_MAIN);
+        lv_obj_set_style_translate_y(battery_slots[i].num, -2, LV_PART_MAIN);
         lv_label_set_text(battery_slots[i].num, "--");
     }
+
+    // Right WPS speed label (14px font size, visual height 9px, aligned at bottom y = 123)
+    // Relative position in 48px row: y_pos_14 = 114 - 87 = 27
+    int y_pos_14 = 27;
+    wps_label = lv_label_create(battery_status_row);
+    lv_obj_set_style_text_font(wps_label, &silkscreen_regular_14, LV_PART_MAIN);
+    lv_obj_set_style_text_color(wps_label, lv_color_white(), LV_PART_MAIN);
+    lv_obj_align(wps_label, LV_ALIGN_TOP_RIGHT, -18, y_pos_14);
+    lv_obj_set_style_translate_y(wps_label, -6, LV_PART_MAIN);
+    lv_label_set_text(wps_label, "WPS:000");
 
     apply_battery_status(NULL);
 }

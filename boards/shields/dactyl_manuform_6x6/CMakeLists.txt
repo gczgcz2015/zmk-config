@@ -12,5 +12,7 @@ if(CONFIG_SHIELD_DACTYL_MANUFORM_6X6_DONGLE)
     src/dongle_display_rotate.c
     src/dongle_display_screen.c
     src/fonts/silkscreen_bold_16.c
+    src/fonts/silkscreen_regular_14.c
+    src/fonts/silkscreen_regular_16.c
   )
 endif()
