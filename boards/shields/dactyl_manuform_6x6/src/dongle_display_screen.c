@@ -179,7 +179,9 @@ static lv_obj_t *bongo_cat_img;
 static lv_obj_t *cat_container;
 static lv_obj_t *left_tap_mask;
 static lv_obj_t *right_tap_mask;
+static lv_obj_t *base_layer_badge;
 static lv_obj_t *base_layer_label;
+static lv_obj_t *fn_layer_badge;
 static lv_obj_t *fn_layer_label;
 static lv_obj_t *modifier_status_row;
 static lv_obj_t *mod_boxes[5];
@@ -631,15 +633,15 @@ static void modifier_status_work_handler(struct k_work *work) {
 /* ══════════════════════════════════════════════════════════════════ */
 
 static void active_label_slide_anim_cb(void *var, int32_t val) {
-    lv_obj_t *label = (lv_obj_t *)var;
-    int32_t y_pos = (label == fn_layer_label) ? 28 : 8;
-    lv_obj_align(label, LV_ALIGN_TOP_RIGHT, -10 + val, y_pos);
+    lv_obj_t *badge = (lv_obj_t *)var;
+    int32_t y_pos = (badge == fn_layer_badge) ? 31 : 8;
+    lv_obj_align(badge, LV_ALIGN_TOP_RIGHT, -10 + val, y_pos);
 }
 
-static void trigger_slide_in(lv_obj_t *label) {
+static void trigger_slide_in(lv_obj_t *badge) {
     lv_anim_t a;
     lv_anim_init(&a);
-    lv_anim_set_var(&a, label);
+    lv_anim_set_var(&a, badge);
     lv_anim_set_values(&a, 60, 0);                 // Slide in from +60px right
     lv_anim_set_time(&a, 250);                     // 250ms duration (springy overshoot)
     lv_anim_set_exec_cb(&a, active_label_slide_anim_cb);
@@ -650,7 +652,8 @@ static void trigger_slide_in(lv_obj_t *label) {
 static void apply_layer_status(void *unused) {
     ARG_UNUSED(unused);
 
-    if (base_layer_label == NULL || fn_layer_label == NULL) {
+    if (base_layer_badge == NULL || base_layer_label == NULL ||
+        fn_layer_badge == NULL || fn_layer_label == NULL) {
         return;
     }
 
@@ -658,30 +661,30 @@ static void apply_layer_status(void *unused) {
 
     if (layer == LAYER_FN_INDEX) {
         // BASE layer inactive: transparent background, gray text
-        lv_obj_set_style_bg_opa(base_layer_label, LV_OPA_TRANSP, LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(base_layer_badge, LV_OPA_TRANSP, LV_PART_MAIN);
         lv_obj_set_style_text_color(base_layer_label, lv_color_hex(0x606060), LV_PART_MAIN);
         lv_label_set_text(base_layer_label, "  BASE");
 
         // FN layer active: red background, white text
-        lv_obj_set_style_bg_color(fn_layer_label, lv_color_hex(0xC63939), LV_PART_MAIN);
-        lv_obj_set_style_bg_opa(fn_layer_label, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(fn_layer_badge, lv_color_hex(0xC63939), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(fn_layer_badge, LV_OPA_COVER, LV_PART_MAIN);
         lv_obj_set_style_text_color(fn_layer_label, lv_color_white(), LV_PART_MAIN);
         lv_label_set_text(fn_layer_label, "> FN ");
 
-        trigger_slide_in(fn_layer_label);
+        trigger_slide_in(fn_layer_badge);
     } else {
         // BASE layer active: blue background, white text
-        lv_obj_set_style_bg_color(base_layer_label, lv_color_hex(0x2B5C8F), LV_PART_MAIN);
-        lv_obj_set_style_bg_opa(base_layer_label, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(base_layer_badge, lv_color_hex(0x2B5C8F), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(base_layer_badge, LV_OPA_COVER, LV_PART_MAIN);
         lv_obj_set_style_text_color(base_layer_label, lv_color_white(), LV_PART_MAIN);
         lv_label_set_text(base_layer_label, "> BASE ");
 
         // FN layer inactive: transparent background, gray text
-        lv_obj_set_style_bg_opa(fn_layer_label, LV_OPA_TRANSP, LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(fn_layer_badge, LV_OPA_TRANSP, LV_PART_MAIN);
         lv_obj_set_style_text_color(fn_layer_label, lv_color_hex(0x606060), LV_PART_MAIN);
         lv_label_set_text(fn_layer_label, "  FN");
 
-        trigger_slide_in(base_layer_label);
+        trigger_slide_in(base_layer_badge);
     }
 }
 
@@ -775,14 +778,14 @@ static void create_battery_status(lv_obj_t *screen) {
     lv_obj_align(battery_status_row, LV_ALIGN_BOTTOM_MID, 0, 0);
     clear_obj_style(battery_status_row);
 
-    // Left battery slots (16px font size, visual height 10px, aligned at bottom y = 123)
-    // Relative position in 48px row: y_pos_16 = 113 - 87 = 26
-    int y_pos_16 = 26;
+    // Left battery slots (16px font size, visual height 12px, aligned at bottom y = 123)
+    // Relative position in 48px row: y_pos_16 = 111 - 87 = 24
+    int y_pos_16 = 24;
 
     for (size_t i = 0; i < BATTERY_SLOT_COUNT; i++) {
         lv_obj_t *slot = lv_obj_create(battery_status_row);
         clear_obj_style(slot);
-        lv_obj_set_size(slot, LV_SIZE_CONTENT, 10);
+        lv_obj_set_size(slot, LV_SIZE_CONTENT, 12);
         lv_obj_set_pos(slot, 18 + i * 60, y_pos_16);
 
         // Align child widgets horizontally inside the slot
@@ -791,15 +794,15 @@ static void create_battery_status(lv_obj_t *screen) {
         lv_obj_set_flex_align(slot, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
         lv_obj_set_style_pad_column(slot, 6, LV_PART_MAIN);
 
-        // Custom pixel-art battery icon container (width 22, height 10)
+        // Custom pixel-art battery icon container (width 26, height 12)
         lv_obj_t *icon_box = lv_obj_create(slot);
         clear_obj_style(icon_box);
-        lv_obj_set_size(icon_box, 22, 10);
+        lv_obj_set_size(icon_box, 26, 12);
         lv_obj_clear_flag(icon_box, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
 
-        // Battery outer outline box (width 20, height 10, radius 0, transparent bg, 1px border)
+        // Battery outer outline box (width 24, height 12, radius 0, transparent bg, 1px border)
         battery_slots[i].icon_body = lv_obj_create(icon_box);
-        lv_obj_set_size(battery_slots[i].icon_body, 20, 10);
+        lv_obj_set_size(battery_slots[i].icon_body, 24, 12);
         lv_obj_align(battery_slots[i].icon_body, LV_ALIGN_LEFT_MID, 0, 0);
         lv_obj_set_style_bg_opa(battery_slots[i].icon_body, LV_OPA_TRANSP, LV_PART_MAIN);
         lv_obj_set_style_border_width(battery_slots[i].icon_body, 1, LV_PART_MAIN);
@@ -808,9 +811,9 @@ static void create_battery_status(lv_obj_t *screen) {
         lv_obj_set_style_pad_all(battery_slots[i].icon_body, 0, LV_PART_MAIN);
         lv_obj_clear_flag(battery_slots[i].icon_body, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
 
-        // Battery terminal cap (width 2, height 4, aligned to the right center)
+        // Battery terminal cap (width 2, height 6, aligned to the right center)
         battery_slots[i].icon_cap = lv_obj_create(icon_box);
-        lv_obj_set_size(battery_slots[i].icon_cap, 2, 4);
+        lv_obj_set_size(battery_slots[i].icon_cap, 2, 6);
         lv_obj_align(battery_slots[i].icon_cap, LV_ALIGN_RIGHT_MID, 0, 0);
         lv_obj_set_style_bg_color(battery_slots[i].icon_cap, lv_color_white(), LV_PART_MAIN);
         lv_obj_set_style_bg_opa(battery_slots[i].icon_cap, LV_OPA_COVER, LV_PART_MAIN);
@@ -819,9 +822,9 @@ static void create_battery_status(lv_obj_t *screen) {
         lv_obj_set_style_pad_all(battery_slots[i].icon_cap, 0, LV_PART_MAIN);
         lv_obj_clear_flag(battery_slots[i].icon_cap, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
 
-        // Battery fill indicator (width 18, height 8 inside the 20x10 outer box)
+        // Battery fill indicator (width 22, height 10 inside the 24x12 outer box)
         battery_slots[i].bar = lv_bar_create(battery_slots[i].icon_body);
-        lv_obj_set_size(battery_slots[i].bar, 18, 8);
+        lv_obj_set_size(battery_slots[i].bar, 22, 10);
         lv_obj_align(battery_slots[i].bar, LV_ALIGN_LEFT_MID, 0, 0);
         lv_obj_set_style_bg_opa(battery_slots[i].bar, LV_OPA_TRANSP, LV_PART_MAIN);
         lv_obj_set_style_radius(battery_slots[i].bar, 0, LV_PART_MAIN);
@@ -841,14 +844,11 @@ static void create_battery_status(lv_obj_t *screen) {
         lv_label_set_text(battery_slots[i].num, "--");
     }
 
-    // Right WPS speed label (14px font size, visual height 9px, aligned at bottom y = 123)
-    // Relative position in 48px row: y_pos_14 = 114 - 87 = 27
-    int y_pos_14 = 27;
+    // Right WPS speed label (16px font size, visual height 10px, aligned at bottom y = 123)
     wps_label = lv_label_create(battery_status_row);
-    lv_obj_set_style_text_font(wps_label, &silkscreen_regular_14, LV_PART_MAIN);
+    lv_obj_set_style_text_font(wps_label, &silkscreen_regular_16, LV_PART_MAIN);
     lv_obj_set_style_text_color(wps_label, lv_color_white(), LV_PART_MAIN);
-    lv_obj_align(wps_label, LV_ALIGN_TOP_RIGHT, -18, y_pos_14);
-    lv_obj_set_style_translate_y(wps_label, -6, LV_PART_MAIN);
+    lv_obj_align(wps_label, LV_ALIGN_TOP_RIGHT, -18, 20); // 顶端偏移 20px 配合 16px 字体达到底端 aligned
     lv_label_set_text(wps_label, "WPS:000");
 
     apply_battery_status(NULL);
@@ -919,29 +919,41 @@ static void create_modifier_status(lv_obj_t *screen) {
 }
 
 static void create_layer_status(lv_obj_t *screen) {
-    // Create BASE layer label
-    base_layer_label = lv_label_create(screen);
-    lv_obj_set_style_text_font(base_layer_label, &silkscreen_bold_16, LV_PART_MAIN);
-    lv_obj_set_style_radius(base_layer_label, 3, LV_PART_MAIN);
-    lv_obj_set_style_pad_left(base_layer_label, 6, LV_PART_MAIN);
-    lv_obj_set_style_pad_right(base_layer_label, 6, LV_PART_MAIN);
-    lv_obj_set_style_pad_top(base_layer_label, 1, LV_PART_MAIN);
-    lv_obj_set_style_pad_bottom(base_layer_label, 1, LV_PART_MAIN);
-    lv_obj_align(base_layer_label, LV_ALIGN_TOP_RIGHT, -10, 8);
+    // Create BASE layer badge container
+    base_layer_badge = lv_obj_create(screen);
+    clear_obj_style(base_layer_badge);
+    lv_obj_set_size(base_layer_badge, LV_SIZE_CONTENT, 20);
+    lv_obj_set_style_radius(base_layer_badge, 3, LV_PART_MAIN);
+    lv_obj_set_layout(base_layer_badge, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(base_layer_badge, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(base_layer_badge, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_left(base_layer_badge, 6, LV_PART_MAIN);
+    lv_obj_set_style_pad_right(base_layer_badge, 6, LV_PART_MAIN);
+    lv_obj_align(base_layer_badge, LV_ALIGN_TOP_RIGHT, -10, 8);
 
-    // Create FN layer label
-    fn_layer_label = lv_label_create(screen);
+    base_layer_label = lv_label_create(base_layer_badge);
+    lv_obj_set_style_text_font(base_layer_label, &silkscreen_bold_16, LV_PART_MAIN);
+    lv_obj_set_style_translate_y(base_layer_label, -1, LV_PART_MAIN); // 垂直微调 1 像素以完美对齐
+
+    // Create FN layer badge container
+    fn_layer_badge = lv_obj_create(screen);
+    clear_obj_style(fn_layer_badge);
+    lv_obj_set_size(fn_layer_badge, LV_SIZE_CONTENT, 20);
+    lv_obj_set_style_radius(fn_layer_badge, 3, LV_PART_MAIN);
+    lv_obj_set_layout(fn_layer_badge, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(fn_layer_badge, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(fn_layer_badge, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_left(fn_layer_badge, 6, LV_PART_MAIN);
+    lv_obj_set_style_pad_right(fn_layer_badge, 6, LV_PART_MAIN);
+    lv_obj_align(fn_layer_badge, LV_ALIGN_TOP_RIGHT, -10, 31); // 8 + 20 + 3 = 31
+
+    fn_layer_label = lv_label_create(fn_layer_badge);
     lv_obj_set_style_text_font(fn_layer_label, &silkscreen_bold_16, LV_PART_MAIN);
-    lv_obj_set_style_radius(fn_layer_label, 3, LV_PART_MAIN);
-    lv_obj_set_style_pad_left(fn_layer_label, 6, LV_PART_MAIN);
-    lv_obj_set_style_pad_right(fn_layer_label, 6, LV_PART_MAIN);
-    lv_obj_set_style_pad_top(fn_layer_label, 1, LV_PART_MAIN);
-    lv_obj_set_style_pad_bottom(fn_layer_label, 1, LV_PART_MAIN);
-    lv_obj_align(fn_layer_label, LV_ALIGN_TOP_RIGHT, -10, 28); // 8 + 16 + 4
+    lv_obj_set_style_translate_y(fn_layer_label, -1, LV_PART_MAIN); // 垂直微调 1 像素以完美对齐
 
     apply_layer_status(NULL);
-    lv_obj_move_foreground(base_layer_label);
-    lv_obj_move_foreground(fn_layer_label);
+    lv_obj_move_foreground(base_layer_badge);
+    lv_obj_move_foreground(fn_layer_badge);
 }
 
 static void create_bongo_cat(lv_obj_t *screen) {
