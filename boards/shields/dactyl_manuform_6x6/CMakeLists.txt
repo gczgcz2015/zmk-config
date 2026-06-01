@@ -1,5 +1,11 @@
 if(CONFIG_SHIELD_DACTYL_MANUFORM_6X6_DONGLE)
   zephyr_library()
+  zephyr_library_include_directories(${ZEPHYR_LVGL_MODULE_DIR})
+  zephyr_library_include_directories(${ZEPHYR_BASE}/lib/gui/lvgl/)
+  zephyr_library_include_directories(${ZEPHYR_BASE}/drivers)
+  zephyr_library_include_directories(${CMAKE_SOURCE_DIR}/include)
+  zephyr_library_include_directories(${ZEPHYR_CURRENT_MODULE_DIR}/include)
+  zephyr_library_include_directories(${ZEPHYR_CURRENT_CMAKE_DIR}/include)
   zephyr_library_sources(
     src/bongo_cat_art.c
     src/dongle_display_brightness.c
