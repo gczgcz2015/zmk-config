@@ -202,10 +202,10 @@ static uint8_t speed_ring_count;
 static struct k_spinlock speed_lock;
 
 struct battery_slot_obj {
+    lv_obj_t *icon_body;
+    lv_obj_t *icon_cap;
     lv_obj_t *bar;
     lv_obj_t *num;
-    lv_obj_t *nc_bar;
-    lv_obj_t *nc_num;
 };
 
 static lv_obj_t *battery_status_row;
@@ -710,42 +710,35 @@ static void apply_battery_status(void *unused) {
         struct battery_slot_obj *slot = &battery_slots[i];
 
         if (connected[i]) {
-            lv_obj_clear_flag(slot->bar, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_clear_flag(slot->num, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_flag(slot->nc_bar, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_flag(slot->nc_num, LV_OBJ_FLAG_HIDDEN);
+            // Restore connected colors (white battery borders and white text)
+            lv_obj_set_style_border_color(slot->icon_body, lv_color_white(), LV_PART_MAIN);
+            lv_obj_set_style_bg_color(slot->icon_cap, lv_color_white(), LV_PART_MAIN);
+            lv_obj_set_style_text_color(slot->num, lv_color_white(), LV_PART_MAIN);
 
-            lv_bar_set_value(slot->bar, known[i] ? levels[i] : 0, LV_ANIM_ON);
             if (known[i]) {
-                lv_label_set_text_fmt(slot->num, "%d", levels[i]);
+                lv_bar_set_value(slot->bar, levels[i], LV_ANIM_ON);
+                lv_label_set_text_fmt(slot->num, "%d%%", levels[i]);
+
+                // Level-based status colors
+                if (levels[i] > 50) {
+                    lv_obj_set_style_bg_color(slot->bar, lv_color_hex(0x4CAF50), LV_PART_INDICATOR);
+                } else if (levels[i] >= 20) {
+                    lv_obj_set_style_bg_color(slot->bar, lv_color_hex(0xF57C00), LV_PART_INDICATOR);
+                } else {
+                    lv_obj_set_style_bg_color(slot->bar, lv_color_hex(0xD32F2F), LV_PART_INDICATOR);
+                }
             } else {
+                lv_bar_set_value(slot->bar, 0, LV_ANIM_ON);
                 lv_label_set_text(slot->num, "--");
             }
-
-            if (known[i] && levels[i] < 20) {
-                lv_obj_set_style_bg_color(slot->bar, lv_color_hex(0xD3900F),
-                                          LV_PART_INDICATOR);
-                lv_obj_set_style_bg_grad_color(slot->bar, lv_color_hex(0xE8AC11),
-                                               LV_PART_INDICATOR);
-                lv_obj_set_style_bg_color(slot->bar, lv_color_hex(0x6E4E07),
-                                          LV_PART_MAIN);
-                lv_obj_set_style_text_color(slot->num, lv_color_hex(0xFFB802),
-                                            LV_PART_MAIN);
-            } else {
-                lv_obj_set_style_bg_color(slot->bar, lv_color_hex(0x909090),
-                                          LV_PART_INDICATOR);
-                lv_obj_set_style_bg_grad_color(slot->bar, lv_color_hex(0xF0F0F0),
-                                               LV_PART_INDICATOR);
-                lv_obj_set_style_bg_color(slot->bar, lv_color_hex(0x202020),
-                                          LV_PART_MAIN);
-                lv_obj_set_style_text_color(slot->num, lv_color_white(),
-                                            LV_PART_MAIN);
-            }
         } else {
-            lv_obj_add_flag(slot->bar, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_flag(slot->num, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_clear_flag(slot->nc_bar, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_clear_flag(slot->nc_num, LV_OBJ_FLAG_HIDDEN);
+            // Disconnected: Grey outline, grey text, empty bar
+            lv_obj_set_style_border_color(slot->icon_body, lv_color_hex(0x606060), LV_PART_MAIN);
+            lv_obj_set_style_bg_color(slot->icon_cap, lv_color_hex(0x606060), LV_PART_MAIN);
+            lv_obj_set_style_text_color(slot->num, lv_color_hex(0x606060), LV_PART_MAIN);
+
+            lv_bar_set_value(slot->bar, 0, LV_ANIM_OFF);
+            lv_label_set_text(slot->num, "--");
         }
     }
 }
@@ -785,53 +778,59 @@ static void create_battery_status(lv_obj_t *screen) {
         lv_obj_set_height(slot, lv_pct(100));
         lv_obj_set_flex_grow(slot, 1);
 
-        battery_slots[i].bar = lv_bar_create(slot);
-        lv_obj_set_size(battery_slots[i].bar, lv_pct(100), BATTERY_BAR_H);
-        lv_obj_align(battery_slots[i].bar, LV_ALIGN_BOTTOM_MID, 0, 0);
-        lv_obj_set_style_bg_color(battery_slots[i].bar, lv_color_hex(0x202020),
-                                  LV_PART_MAIN);
-        lv_obj_set_style_bg_opa(battery_slots[i].bar, LV_OPA_COVER, LV_PART_MAIN);
-        lv_obj_set_style_radius(battery_slots[i].bar, 1, LV_PART_MAIN);
-        lv_obj_set_style_bg_color(battery_slots[i].bar, lv_color_hex(0x909090),
-                                  LV_PART_INDICATOR);
-        lv_obj_set_style_bg_opa(battery_slots[i].bar, LV_OPA_COVER,
-                                LV_PART_INDICATOR);
-        lv_obj_set_style_bg_grad_color(battery_slots[i].bar, lv_color_hex(0xF0F0F0),
-                                       LV_PART_INDICATOR);
-        lv_obj_set_style_bg_grad_dir(battery_slots[i].bar, LV_GRAD_DIR_HOR,
-                                     LV_PART_INDICATOR);
-        lv_obj_set_style_radius(battery_slots[i].bar, 1, LV_PART_INDICATOR);
+        // Align child widgets horizontally inside the slot
+        lv_obj_set_layout(slot, LV_LAYOUT_FLEX);
+        lv_obj_set_flex_flow(slot, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(slot, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_column(slot, 6, LV_PART_MAIN);
+
+        // Custom pixel-art battery icon container (width 22, height 10)
+        lv_obj_t *icon_box = lv_obj_create(slot);
+        clear_obj_style(icon_box);
+        lv_obj_set_size(icon_box, 22, 10);
+        lv_obj_clear_flag(icon_box, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+
+        // Battery outer outline box (width 20, height 10, radius 0, transparent bg, 1px border)
+        battery_slots[i].icon_body = lv_obj_create(icon_box);
+        lv_obj_set_size(battery_slots[i].icon_body, 20, 10);
+        lv_obj_align(battery_slots[i].icon_body, LV_ALIGN_LEFT_MID, 0, 0);
+        lv_obj_set_style_bg_opa(battery_slots[i].icon_body, LV_OPA_TRANSP, LV_PART_MAIN);
+        lv_obj_set_style_border_width(battery_slots[i].icon_body, 1, LV_PART_MAIN);
+        lv_obj_set_style_border_color(battery_slots[i].icon_body, lv_color_white(), LV_PART_MAIN);
+        lv_obj_set_style_radius(battery_slots[i].icon_body, 0, LV_PART_MAIN);
+        lv_obj_set_style_pad_all(battery_slots[i].icon_body, 0, LV_PART_MAIN);
+        lv_obj_clear_flag(battery_slots[i].icon_body, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+
+        // Battery terminal cap (width 2, height 4, aligned to the right center)
+        battery_slots[i].icon_cap = lv_obj_create(icon_box);
+        lv_obj_set_size(battery_slots[i].icon_cap, 2, 4);
+        lv_obj_align(battery_slots[i].icon_cap, LV_ALIGN_RIGHT_MID, 0, 0);
+        lv_obj_set_style_bg_color(battery_slots[i].icon_cap, lv_color_white(), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(battery_slots[i].icon_cap, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_border_width(battery_slots[i].icon_cap, 0, LV_PART_MAIN);
+        lv_obj_set_style_radius(battery_slots[i].icon_cap, 0, LV_PART_MAIN);
+        lv_obj_set_style_pad_all(battery_slots[i].icon_cap, 0, LV_PART_MAIN);
+        lv_obj_clear_flag(battery_slots[i].icon_cap, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+
+        // Battery fill indicator (width 18, height 8 inside the 20x10 outer box)
+        battery_slots[i].bar = lv_bar_create(battery_slots[i].icon_body);
+        lv_obj_set_size(battery_slots[i].bar, 18, 8);
+        lv_obj_align(battery_slots[i].bar, LV_ALIGN_LEFT_MID, 0, 0);
+        lv_obj_set_style_bg_opa(battery_slots[i].bar, LV_OPA_TRANSP, LV_PART_MAIN);
+        lv_obj_set_style_radius(battery_slots[i].bar, 0, LV_PART_MAIN);
+        lv_obj_set_style_radius(battery_slots[i].bar, 0, LV_PART_INDICATOR);
+        lv_obj_set_style_bg_opa(battery_slots[i].bar, LV_OPA_COVER, LV_PART_INDICATOR);
         lv_obj_set_style_anim_time(battery_slots[i].bar, 250, 0);
         lv_bar_set_range(battery_slots[i].bar, 0, 100);
         lv_bar_set_value(battery_slots[i].bar, 0, LV_ANIM_OFF);
 
+        // Percentage text label (silkscreen_bold_16)
         battery_slots[i].num = lv_label_create(slot);
         lv_obj_set_style_text_font(battery_slots[i].num, &silkscreen_bold_16,
                                    LV_PART_MAIN);
         lv_obj_set_style_text_color(battery_slots[i].num, lv_color_white(),
                                     LV_PART_MAIN);
-        lv_obj_align(battery_slots[i].num, LV_ALIGN_CENTER, 0, 0);
         lv_label_set_text(battery_slots[i].num, "--");
-
-        battery_slots[i].nc_bar = lv_obj_create(slot);
-        lv_obj_set_size(battery_slots[i].nc_bar, lv_pct(100), BATTERY_BAR_H);
-        lv_obj_align(battery_slots[i].nc_bar, LV_ALIGN_BOTTOM_MID, 0, 0);
-        lv_obj_set_style_bg_color(battery_slots[i].nc_bar, lv_color_hex(0x9E2121),
-                                  LV_PART_MAIN);
-        lv_obj_set_style_bg_opa(battery_slots[i].nc_bar, LV_OPA_COVER,
-                                LV_PART_MAIN);
-        lv_obj_set_style_radius(battery_slots[i].nc_bar, 1, LV_PART_MAIN);
-        lv_obj_set_style_border_width(battery_slots[i].nc_bar, 0, LV_PART_MAIN);
-        lv_obj_clear_flag(battery_slots[i].nc_bar,
-                          LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
-
-        battery_slots[i].nc_num = lv_label_create(slot);
-        lv_obj_set_style_text_font(battery_slots[i].nc_num, &silkscreen_bold_16,
-                                   LV_PART_MAIN);
-        lv_obj_set_style_text_color(battery_slots[i].nc_num, lv_color_hex(0xE63030),
-                                    LV_PART_MAIN);
-        lv_obj_align(battery_slots[i].nc_num, LV_ALIGN_CENTER, 0, 0);
-        lv_label_set_text(battery_slots[i].nc_num, "x");
     }
 
     apply_battery_status(NULL);
