@@ -8,7 +8,7 @@ It currently builds:
 - a normal `dactyl_manuform_6x6_left` central firmware target for the left half
 - a dongle-mode `dactyl_manuform_6x6_left_peripheral` firmware target for the left half
 - a real `dactyl_manuform_6x6_right` firmware target for the right half
-- a Prospector-compatible `dactyl_manuform_6x6_dongle` target for a Seeed Studio XIAO nRF52840
+- a display dongle `dactyl_manuform_6x6_dongle` target for a Seeed Studio XIAO nRF52840
 - a safe `settings_reset` firmware image for clearing persistent settings
 
 ## Current Dactyl assumptions
@@ -30,16 +30,14 @@ definitions in the shield overlay files.
 
 ## Dongle mode
 
-The dongle build follows the Prospector ZMK module setup. The XIAO dongle is
-the split central and uses the `prospector_adapter` shield for the 1.69-inch
-ST7789 display. Ambient light sensing is disabled by default, so the screen can
-be wired without the optional APDS9960 sensor. The default Prospector layer
-roller is reduced and moved to the top-left corner, with a Bongo Cat-style LVGL
-bitmap animation drawn in the center of the display.
+The XIAO dongle is the split central and directly owns the 1.69-inch ST7789
+display setup. The status screen is local to this config and draws the battery
+bars, layer status, modifier indicators, and Bongo Cat-style LVGL bitmap
+animation without depending on the external Prospector module.
 
 To use dongle mode, flash:
 
-- `dactyl-manuform-6x6-prospector-dongle.uf2` to the XIAO nRF52840 dongle
+- `dactyl-manuform-6x6-display-dongle.uf2` to the XIAO nRF52840 dongle
 - `dactyl-manuform-6x6-left-peripheral.uf2` to the left half
 - `dactyl-manuform-6x6-right.uf2` to the right half
 

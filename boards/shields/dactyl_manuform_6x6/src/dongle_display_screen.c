@@ -5,8 +5,10 @@
 #include <zephyr/init.h>
 #include <zephyr/kernel.h>
 #include <zmk/event_manager.h>
+#include <zmk/events/battery_state_changed.h>
 #include <zmk/events/layer_state_changed.h>
 #include <zmk/events/position_state_changed.h>
+#include <zmk/events/split_central_status_changed.h>
 #include <zmk/hid.h>
 #include <zmk/keymap.h>
 
@@ -155,6 +157,15 @@ static const lv_img_dsc_t win_symbol_img = {
 #define LAYER_STATUS_W      92
 #define LAYER_FN_INDEX      1
 
+/* ──────────────────────── Battery Status ──────────────────────── */
+
+#define BATTERY_STATUS_H     48
+#define BATTERY_BAR_H        4
+#define BATTERY_ROW_PAD_X    16
+#define BATTERY_ROW_PAD_B    12
+#define BATTERY_ROW_GAP      12
+#define BATTERY_SLOT_COUNT   CONFIG_ZMK_SPLIT_BLE_CENTRAL_PERIPHERALS
+
 /* ──────────────────────── Static Variables ──────────────────────── */
 
 /* Bongo cat */
@@ -162,18 +173,17 @@ static struct k_work_delayable bongo_frame_work;
 static struct k_work_delayable bongo_down_work;
 static struct k_work_delayable bongo_return_work;
 static struct k_work_delayable bongo_busy_work;
-static struct k_work_delayable display_overlay_work;
 static struct k_work_delayable modifier_status_work;
 static lv_obj_t *bongo_cat_img;
 static lv_obj_t *cat_container;
 static lv_obj_t *left_tap_mask;
 static lv_obj_t *right_tap_mask;
-static lv_obj_t *layer_roller_obj;
 static lv_obj_t *base_layer_label;
 static lv_obj_t *fn_layer_label;
 static lv_obj_t *modifier_status_row;
 static lv_obj_t *mod_boxes[5];
-static bool display_overlay_installed;
+static bool display_screen_ready;
+static bool display_work_ready;
 static enum bongo_cat_frame pending_bongo_frame = BONGO_CAT_RESTING;
 static uint8_t active_key_count;
 static bool busy_tick_running;
@@ -191,6 +201,20 @@ static int64_t keystroke_times[SPEED_RING_SIZE];
 static uint8_t speed_ring_head;
 static uint8_t speed_ring_count;
 static struct k_spinlock speed_lock;
+
+struct battery_slot_obj {
+    lv_obj_t *bar;
+    lv_obj_t *num;
+    lv_obj_t *nc_bar;
+    lv_obj_t *nc_num;
+};
+
+static lv_obj_t *battery_status_row;
+static struct battery_slot_obj battery_slots[BATTERY_SLOT_COUNT];
+static uint8_t battery_levels[BATTERY_SLOT_COUNT];
+static bool battery_level_known[BATTERY_SLOT_COUNT];
+static bool battery_connected[BATTERY_SLOT_COUNT];
+static struct k_spinlock battery_lock;
 
 /* ══════════════════════════════════════════════════════════════════ */
 /*                       Bongo Cat Animation                        */
@@ -308,6 +332,10 @@ static void bongo_frame_work_handler(struct k_work *work) {
 }
 
 static void schedule_bongo_frame(enum bongo_cat_frame frame, k_timeout_t delay) {
+    if (!display_work_ready) {
+        return;
+    }
+
     pending_bongo_frame = frame;
     k_work_reschedule(&bongo_frame_work, delay);
 }
@@ -332,7 +360,7 @@ static void bongo_down_work_handler(struct k_work *work) {
 static void bongo_busy_work_handler(struct k_work *work) {
     ARG_UNUSED(work);
 
-    if (!display_overlay_installed || calc_kps_x10() < BONGO_BUSY_KPS_X10) {
+    if (!display_screen_ready || calc_kps_x10() < BONGO_BUSY_KPS_X10) {
         busy_tick_running = false;
         busy_phase = 0;
         schedule_bongo_frame(BONGO_CAT_RESTING, K_NO_WAIT);
@@ -352,6 +380,10 @@ static void bongo_busy_work_handler(struct k_work *work) {
 }
 
 static void start_busy_animation(void) {
+    if (!display_work_ready) {
+        return;
+    }
+
     k_work_cancel_delayable(&bongo_down_work);
     k_work_cancel_delayable(&bongo_return_work);
 
@@ -365,12 +397,20 @@ static void start_busy_animation(void) {
 }
 
 static void stop_busy_animation(void) {
+    if (!display_work_ready) {
+        return;
+    }
+
     busy_tick_running = false;
     busy_phase = 0;
     k_work_cancel_delayable(&bongo_busy_work);
 }
 
 static void trigger_typing_frame(bool left_hand) {
+    if (!display_work_ready) {
+        return;
+    }
+
     pending_down_frame = left_hand ? BONGO_CAT_LEFT_DOWN : BONGO_CAT_RIGHT_DOWN;
 
     k_work_cancel_delayable(&bongo_down_work);
@@ -566,7 +606,7 @@ static void update_modifier_status_from_position(uint32_t position, bool pressed
 static void modifier_status_work_handler(struct k_work *work) {
     ARG_UNUSED(work);
 
-    if (!display_overlay_installed) {
+    if (!display_screen_ready) {
         return;
     }
 
@@ -637,67 +677,183 @@ static void apply_layer_status(void *unused) {
 }
 
 /* ══════════════════════════════════════════════════════════════════ */
-/*                       Display Overlay Setup                      */
+/*                       Battery Status                            */
 /* ══════════════════════════════════════════════════════════════════ */
 
-static void hide_layer_roller(lv_obj_t *screen) {
-    uint32_t child_count = lv_obj_get_child_cnt(screen);
+static void clear_obj_style(lv_obj_t *obj) {
+    lv_obj_set_style_bg_opa(obj, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(obj, 0, LV_PART_MAIN);
+    lv_obj_set_style_radius(obj, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(obj, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+}
 
-    if (child_count == 0) {
+static void apply_battery_status(void *unused) {
+    ARG_UNUSED(unused);
+
+    if (battery_status_row == NULL) {
         return;
     }
 
-    layer_roller_obj = lv_obj_get_child(screen, child_count - 1);
-    lv_obj_add_flag(layer_roller_obj, LV_OBJ_FLAG_HIDDEN);
+    uint8_t levels[BATTERY_SLOT_COUNT];
+    bool known[BATTERY_SLOT_COUNT];
+    bool connected[BATTERY_SLOT_COUNT];
+
+    k_spinlock_key_t key = k_spin_lock(&battery_lock);
+    for (size_t i = 0; i < BATTERY_SLOT_COUNT; i++) {
+        levels[i] = battery_levels[i];
+        known[i] = battery_level_known[i];
+        connected[i] = battery_connected[i];
+    }
+    k_spin_unlock(&battery_lock, key);
+
+    for (size_t i = 0; i < BATTERY_SLOT_COUNT; i++) {
+        struct battery_slot_obj *slot = &battery_slots[i];
+
+        if (connected[i]) {
+            lv_obj_clear_flag(slot->bar, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_clear_flag(slot->num, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(slot->nc_bar, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(slot->nc_num, LV_OBJ_FLAG_HIDDEN);
+
+            lv_bar_set_value(slot->bar, known[i] ? levels[i] : 0, LV_ANIM_ON);
+            if (known[i]) {
+                lv_label_set_text_fmt(slot->num, "%d", levels[i]);
+            } else {
+                lv_label_set_text(slot->num, "--");
+            }
+
+            if (known[i] && levels[i] < 20) {
+                lv_obj_set_style_bg_color(slot->bar, lv_color_hex(0xD3900F),
+                                          LV_PART_INDICATOR);
+                lv_obj_set_style_bg_grad_color(slot->bar, lv_color_hex(0xE8AC11),
+                                               LV_PART_INDICATOR);
+                lv_obj_set_style_bg_color(slot->bar, lv_color_hex(0x6E4E07),
+                                          LV_PART_MAIN);
+                lv_obj_set_style_text_color(slot->num, lv_color_hex(0xFFB802),
+                                            LV_PART_MAIN);
+            } else {
+                lv_obj_set_style_bg_color(slot->bar, lv_color_hex(0x909090),
+                                          LV_PART_INDICATOR);
+                lv_obj_set_style_bg_grad_color(slot->bar, lv_color_hex(0xF0F0F0),
+                                               LV_PART_INDICATOR);
+                lv_obj_set_style_bg_color(slot->bar, lv_color_hex(0x202020),
+                                          LV_PART_MAIN);
+                lv_obj_set_style_text_color(slot->num, lv_color_white(),
+                                            LV_PART_MAIN);
+            }
+        } else {
+            lv_obj_add_flag(slot->bar, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(slot->num, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_clear_flag(slot->nc_bar, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_clear_flag(slot->nc_num, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
 }
 
-static void hide_builtin_caps_word_indicator(lv_obj_t *screen) {
-    if (lv_obj_get_child_cnt(screen) < 3) {
+static void set_battery_connected(uint8_t source, bool connected) {
+    if (source >= BATTERY_SLOT_COUNT) {
         return;
     }
 
-    lv_obj_add_flag(lv_obj_get_child(screen, 0), LV_OBJ_FLAG_HIDDEN);
-}
+    k_spinlock_key_t key = k_spin_lock(&battery_lock);
+    battery_connected[source] = connected;
+    k_spin_unlock(&battery_lock, key);
 
-static bool style_battery_number_container(lv_obj_t *battery_widget) {
-    uint32_t info_count = lv_obj_get_child_cnt(battery_widget);
-
-    if (info_count == 0) {
-        return false;
-    }
-
-    for (uint32_t i = 0; i < info_count; i++) {
-        lv_obj_t *info_container = lv_obj_get_child(battery_widget, i);
-        if (lv_obj_get_child_cnt(info_container) < 4) {
-            return false;
-        }
-    }
-
-    for (uint32_t i = 0; i < info_count; i++) {
-        lv_obj_t *info_container = lv_obj_get_child(battery_widget, i);
-        lv_obj_t *num = lv_obj_get_child(info_container, 1);
-
-        lv_obj_set_style_text_font(num, &silkscreen_bold_16, LV_PART_MAIN);
-    }
-
-    return true;
-}
-
-static void style_builtin_battery_numbers(lv_obj_t *screen) {
-    uint32_t child_count = lv_obj_get_child_cnt(screen);
-
-    for (uint32_t i = 0; i < child_count; i++) {
-        lv_obj_t *child = lv_obj_get_child(screen, i);
-
-        if (child == layer_roller_obj) {
-            continue;
-        }
-
-        if (style_battery_number_container(child)) {
-            return;
-        }
+    if (display_screen_ready) {
+        lv_async_call(apply_battery_status, NULL);
     }
 }
+
+static void set_battery_level(uint8_t source, uint8_t level) {
+    if (source >= BATTERY_SLOT_COUNT) {
+        return;
+    }
+
+    k_spinlock_key_t key = k_spin_lock(&battery_lock);
+    battery_levels[source] = level;
+    battery_level_known[source] = true;
+    k_spin_unlock(&battery_lock, key);
+
+    if (display_screen_ready) {
+        lv_async_call(apply_battery_status, NULL);
+    }
+}
+
+static void create_battery_status(lv_obj_t *screen) {
+    battery_status_row = lv_obj_create(screen);
+    lv_obj_set_size(battery_status_row, lv_pct(100), BATTERY_STATUS_H);
+    lv_obj_align(battery_status_row, LV_ALIGN_BOTTOM_MID, 0, 0);
+    clear_obj_style(battery_status_row);
+    lv_obj_set_layout(battery_status_row, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(battery_status_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(battery_status_row, LV_FLEX_ALIGN_SPACE_EVENLY,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(battery_status_row, BATTERY_ROW_GAP, LV_PART_MAIN);
+    lv_obj_set_style_pad_hor(battery_status_row, BATTERY_ROW_PAD_X, LV_PART_MAIN);
+    lv_obj_set_style_pad_bottom(battery_status_row, BATTERY_ROW_PAD_B, LV_PART_MAIN);
+
+    for (size_t i = 0; i < BATTERY_SLOT_COUNT; i++) {
+        lv_obj_t *slot = lv_obj_create(battery_status_row);
+        clear_obj_style(slot);
+        lv_obj_set_height(slot, lv_pct(100));
+        lv_obj_set_flex_grow(slot, 1);
+
+        battery_slots[i].bar = lv_bar_create(slot);
+        lv_obj_set_size(battery_slots[i].bar, lv_pct(100), BATTERY_BAR_H);
+        lv_obj_align(battery_slots[i].bar, LV_ALIGN_BOTTOM_MID, 0, 0);
+        lv_obj_set_style_bg_color(battery_slots[i].bar, lv_color_hex(0x202020),
+                                  LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(battery_slots[i].bar, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_radius(battery_slots[i].bar, 1, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(battery_slots[i].bar, lv_color_hex(0x909090),
+                                  LV_PART_INDICATOR);
+        lv_obj_set_style_bg_opa(battery_slots[i].bar, LV_OPA_COVER,
+                                LV_PART_INDICATOR);
+        lv_obj_set_style_bg_grad_color(battery_slots[i].bar, lv_color_hex(0xF0F0F0),
+                                       LV_PART_INDICATOR);
+        lv_obj_set_style_bg_grad_dir(battery_slots[i].bar, LV_GRAD_DIR_HOR,
+                                     LV_PART_INDICATOR);
+        lv_obj_set_style_radius(battery_slots[i].bar, 1, LV_PART_INDICATOR);
+        lv_obj_set_style_anim_time(battery_slots[i].bar, 250, 0);
+        lv_bar_set_range(battery_slots[i].bar, 0, 100);
+        lv_bar_set_value(battery_slots[i].bar, 0, LV_ANIM_OFF);
+
+        battery_slots[i].num = lv_label_create(slot);
+        lv_obj_set_style_text_font(battery_slots[i].num, &silkscreen_bold_16,
+                                   LV_PART_MAIN);
+        lv_obj_set_style_text_color(battery_slots[i].num, lv_color_white(),
+                                    LV_PART_MAIN);
+        lv_obj_align(battery_slots[i].num, LV_ALIGN_CENTER, 0, 0);
+        lv_label_set_text(battery_slots[i].num, "--");
+
+        battery_slots[i].nc_bar = lv_obj_create(slot);
+        lv_obj_set_size(battery_slots[i].nc_bar, lv_pct(100), BATTERY_BAR_H);
+        lv_obj_align(battery_slots[i].nc_bar, LV_ALIGN_BOTTOM_MID, 0, 0);
+        lv_obj_set_style_bg_color(battery_slots[i].nc_bar, lv_color_hex(0x9E2121),
+                                  LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(battery_slots[i].nc_bar, LV_OPA_COVER,
+                                LV_PART_MAIN);
+        lv_obj_set_style_radius(battery_slots[i].nc_bar, 1, LV_PART_MAIN);
+        lv_obj_set_style_border_width(battery_slots[i].nc_bar, 0, LV_PART_MAIN);
+        lv_obj_clear_flag(battery_slots[i].nc_bar,
+                          LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+
+        battery_slots[i].nc_num = lv_label_create(slot);
+        lv_obj_set_style_text_font(battery_slots[i].nc_num, &silkscreen_bold_16,
+                                   LV_PART_MAIN);
+        lv_obj_set_style_text_color(battery_slots[i].nc_num, lv_color_hex(0xE63030),
+                                    LV_PART_MAIN);
+        lv_obj_align(battery_slots[i].nc_num, LV_ALIGN_CENTER, 0, 0);
+        lv_label_set_text(battery_slots[i].nc_num, "x");
+    }
+
+    apply_battery_status(NULL);
+}
+
+/* ══════════════════════════════════════════════════════════════════ */
+/*                       Display Screen Setup                       */
+/* ══════════════════════════════════════════════════════════════════ */
 
 static void create_modifier_status(lv_obj_t *screen) {
     modifier_status_row = lv_obj_create(screen);
@@ -811,61 +967,64 @@ static void create_bongo_cat(lv_obj_t *screen) {
     }
 
     lv_obj_move_foreground(cat_container);
-    if (layer_roller_obj != NULL) {
-        lv_obj_move_foreground(layer_roller_obj);
-    }
 }
 
-static void install_display_overlay(void *unused) {
-    ARG_UNUSED(unused);
+lv_obj_t *zmk_display_status_screen(void) {
+    lv_obj_t *screen = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(screen, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
 
-    if (display_overlay_installed) {
-        return;
-    }
-
-    lv_obj_t *screen = lv_scr_act();
-    if (screen == NULL || lv_obj_get_child_cnt(screen) == 0) {
-        k_work_reschedule(&display_overlay_work, K_MSEC(500));
-        return;
-    }
-
-    hide_layer_roller(screen);
-    hide_builtin_caps_word_indicator(screen);
-    style_builtin_battery_numbers(screen);
-
+    create_battery_status(screen);
     create_bongo_cat(screen);
     create_layer_status(screen);
     create_modifier_status(screen);
 
-    display_overlay_installed = true;
+    display_screen_ready = true;
 
-    k_work_reschedule(&modifier_status_work, K_NO_WAIT);
+    if (display_work_ready) {
+        k_work_reschedule(&modifier_status_work, K_NO_WAIT);
+    }
+
+    return screen;
 }
 
-static void display_overlay_work_handler(struct k_work *work) {
-    ARG_UNUSED(work);
-    lv_async_call(install_display_overlay, NULL);
-}
-
-static int display_overlay_init(void) {
+static int display_screen_init(void) {
     k_work_init_delayable(&bongo_frame_work, bongo_frame_work_handler);
     k_work_init_delayable(&bongo_down_work, bongo_down_work_handler);
     k_work_init_delayable(&bongo_return_work, bongo_return_work_handler);
     k_work_init_delayable(&bongo_busy_work, bongo_busy_work_handler);
-    k_work_init_delayable(&display_overlay_work, display_overlay_work_handler);
     k_work_init_delayable(&modifier_status_work, modifier_status_work_handler);
-    k_work_schedule(&display_overlay_work, K_SECONDS(2));
+    display_work_ready = true;
+
+    if (display_screen_ready) {
+        k_work_reschedule(&modifier_status_work, K_NO_WAIT);
+    }
 
     return 0;
 }
 
-SYS_INIT(display_overlay_init, APPLICATION, CONFIG_APPLICATION_INIT_PRIORITY);
+SYS_INIT(display_screen_init, APPLICATION, CONFIG_APPLICATION_INIT_PRIORITY);
 
 /* ══════════════════════════════════════════════════════════════════ */
 /*                       ZMK Event Listener                         */
 /* ══════════════════════════════════════════════════════════════════ */
 
 static int bongo_cat_listener(const zmk_event_t *eh) {
+    const struct zmk_peripheral_battery_state_changed *battery_ev =
+        as_zmk_peripheral_battery_state_changed(eh);
+    if (battery_ev != NULL) {
+        set_battery_level(battery_ev->source, battery_ev->state_of_charge);
+        return ZMK_EV_EVENT_BUBBLE;
+    }
+
+    const struct zmk_split_central_status_changed *status_ev =
+        as_zmk_split_central_status_changed(eh);
+    if (status_ev != NULL) {
+        set_battery_connected(status_ev->slot, status_ev->connected);
+        return ZMK_EV_EVENT_BUBBLE;
+    }
+
 #ifdef CONFIG_ZMK_CAPS_WORD
     const struct zmk_caps_word_state_changed *caps_ev = as_zmk_caps_word_state_changed(eh);
     if (caps_ev != NULL) {
@@ -920,3 +1079,5 @@ ZMK_SUBSCRIPTION(dactyl_bongo_cat, zmk_caps_word_state_changed);
 #endif
 ZMK_SUBSCRIPTION(dactyl_bongo_cat, zmk_layer_state_changed);
 ZMK_SUBSCRIPTION(dactyl_bongo_cat, zmk_position_state_changed);
+ZMK_SUBSCRIPTION(dactyl_bongo_cat, zmk_peripheral_battery_state_changed);
+ZMK_SUBSCRIPTION(dactyl_bongo_cat, zmk_split_central_status_changed);

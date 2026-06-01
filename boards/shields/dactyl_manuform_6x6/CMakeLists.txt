@@ -2,7 +2,9 @@ if(CONFIG_SHIELD_DACTYL_MANUFORM_6X6_DONGLE)
   zephyr_library()
   zephyr_library_sources(
     src/bongo_cat_art.c
-    src/dongle_display_overlay.c
+    src/dongle_display_brightness.c
+    src/dongle_display_rotate.c
+    src/dongle_display_screen.c
     src/fonts/silkscreen_bold_16.c
   )
 endif()
