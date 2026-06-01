@@ -8,7 +8,6 @@
 #include <zmk/events/battery_state_changed.h>
 #include <zmk/events/layer_state_changed.h>
 #include <zmk/events/position_state_changed.h>
-#include <zmk/events/split_central_status_changed.h>
 #include <zmk/hid.h>
 #include <zmk/keymap.h>
 
@@ -751,20 +750,6 @@ static void apply_battery_status(void *unused) {
     }
 }
 
-static void set_battery_connected(uint8_t source, bool connected) {
-    if (source >= BATTERY_SLOT_COUNT) {
-        return;
-    }
-
-    k_spinlock_key_t key = k_spin_lock(&battery_lock);
-    battery_connected[source] = connected;
-    k_spin_unlock(&battery_lock, key);
-
-    if (display_screen_ready) {
-        lv_async_call(apply_battery_status, NULL);
-    }
-}
-
 static void set_battery_level(uint8_t source, uint8_t level) {
     if (source >= BATTERY_SLOT_COUNT) {
         return;
@@ -772,7 +757,8 @@ static void set_battery_level(uint8_t source, uint8_t level) {
 
     k_spinlock_key_t key = k_spin_lock(&battery_lock);
     battery_levels[source] = level;
-    battery_level_known[source] = true;
+    battery_level_known[source] = level > 0;
+    battery_connected[source] = level > 0;
     k_spin_unlock(&battery_lock, key);
 
     if (display_screen_ready) {
@@ -1018,13 +1004,6 @@ static int bongo_cat_listener(const zmk_event_t *eh) {
         return ZMK_EV_EVENT_BUBBLE;
     }
 
-    const struct zmk_split_central_status_changed *status_ev =
-        as_zmk_split_central_status_changed(eh);
-    if (status_ev != NULL) {
-        set_battery_connected(status_ev->slot, status_ev->connected);
-        return ZMK_EV_EVENT_BUBBLE;
-    }
-
 #ifdef CONFIG_ZMK_CAPS_WORD
     const struct zmk_caps_word_state_changed *caps_ev = as_zmk_caps_word_state_changed(eh);
     if (caps_ev != NULL) {
@@ -1080,4 +1059,3 @@ ZMK_SUBSCRIPTION(dactyl_bongo_cat, zmk_caps_word_state_changed);
 ZMK_SUBSCRIPTION(dactyl_bongo_cat, zmk_layer_state_changed);
 ZMK_SUBSCRIPTION(dactyl_bongo_cat, zmk_position_state_changed);
 ZMK_SUBSCRIPTION(dactyl_bongo_cat, zmk_peripheral_battery_state_changed);
-ZMK_SUBSCRIPTION(dactyl_bongo_cat, zmk_split_central_status_changed);
