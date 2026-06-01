@@ -4,11 +4,7 @@
  * Opts: --bpp 4 --size 16 --no-compress --font /Users/paul/.gemini/antigravity-cli/brain/5f573838-ce2e-4f3b-ae4b-2251e4068367/scratch/Silkscreen-Regular.ttf --range 0x20-0x7F --format lvgl -o /Users/paul/firmware/zmk-config/boards/shields/dactyl_manuform_6x6/src/fonts/silkscreen_regular_16.c
  ******************************************************************************/
 
-#ifdef LV_LVGL_H_INCLUDE_SIMPLE
 #include "lvgl.h"
-#else
-#include "lvgl/lvgl.h"
-#endif
 
 #ifndef SILKSCREEN_REGULAR_16
 #define SILKSCREEN_REGULAR_16 1
