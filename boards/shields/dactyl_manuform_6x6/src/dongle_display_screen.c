@@ -26,7 +26,7 @@ LV_FONT_DECLARE(silkscreen_regular_16);
 #define BONGO_ACTIVE_MS     110
 #define BONGO_DOWN_MS       80
 #define BONGO_BUSY_TICK_MS  120
-#define BONGO_BUSY_KPS_X10  28
+#define BONGO_BUSY_KPS_X10  45
 
 enum bongo_cat_frame {
     BONGO_CAT_RESTING,
@@ -40,8 +40,8 @@ enum bongo_cat_frame {
 
 /* ──────────────────────── Typing Speed Tracker ──────────────────────── */
 
-#define SPEED_RING_SIZE     16    /* Track last 16 keystrokes             */
-#define BONGO_SPEED_DECAY_MS 2000 /* Speed drops to 0 after idle timeout  */
+#define SPEED_RING_SIZE     32    /* Track last 32 keystrokes             */
+#define SPEED_WINDOW_MS     1200  /* Sliding time window in ms            */
 
 /*
  * The cat image is 204x120. Use a full-screen transparent container so
@@ -443,37 +443,25 @@ static void record_keystroke_time(void) {
  * E.g. a return value of 45 means 4.5 KPS.
  */
 static int calc_kps_x10(void) {
+    int64_t now = k_uptime_get();
+    int64_t limit = now - SPEED_WINDOW_MS;
+
     k_spinlock_key_t key = k_spin_lock(&speed_lock);
     uint8_t count = speed_ring_count;
     uint8_t head  = speed_ring_head;
-    /* Snapshot the two timestamps we need while under lock */
-    int64_t newest = 0, oldest = 0;
-    if (count >= 2) {
-        uint8_t newest_idx = (head - 1 + SPEED_RING_SIZE) % SPEED_RING_SIZE;
-        uint8_t oldest_idx = (head - count + SPEED_RING_SIZE) % SPEED_RING_SIZE;
-        newest = keystroke_times[newest_idx];
-        oldest = keystroke_times[oldest_idx];
+    int active_clicks = 0;
+
+    for (uint8_t i = 0; i < count; i++) {
+        uint8_t idx = (head - 1 - i + SPEED_RING_SIZE) % SPEED_RING_SIZE;
+        if (keystroke_times[idx] > limit) {
+            active_clicks++;
+        } else {
+            break;
+        }
     }
     k_spin_unlock(&speed_lock, key);
 
-    if (count < 2) {
-        return 0;
-    }
-
-    int64_t now = k_uptime_get();
-
-    /* No recent activity -> no busy animation */
-    if ((now - newest) > BONGO_SPEED_DECAY_MS) {
-        return 0;
-    }
-
-    int64_t span_ms = newest - oldest;
-    if (span_ms <= 0) {
-        return 0;
-    }
-
-    /* (count-1) keystrokes in span_ms milliseconds -> KPS x 10 */
-    return (int)((int64_t)(count - 1) * 10000 / span_ms);
+    return (int)((int64_t)active_clicks * 10000 / SPEED_WINDOW_MS);
 }
 
 /* ══════════════════════════════════════════════════════════════════ */
