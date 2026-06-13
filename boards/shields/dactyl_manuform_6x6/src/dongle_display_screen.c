@@ -6,16 +6,14 @@
 #include <zephyr/kernel.h>
 #include <zmk/event_manager.h>
 #include <zmk/events/battery_state_changed.h>
+#include <zmk/events/hid_indicators_changed.h>
 #include <zmk/events/layer_state_changed.h>
 #include <zmk/events/position_state_changed.h>
 #include <zmk/hid.h>
+#include <zmk/hid_indicators.h>
 #include <zmk/keymap.h>
 
 #include "bongo_cat_art.h"
-
-#ifdef CONFIG_ZMK_CAPS_WORD
-#include <zmk/events/caps_word_state_changed.h>
-#endif
 
 LV_FONT_DECLARE(silkscreen_bold_16);
 LV_FONT_DECLARE(silkscreen_regular_14);
@@ -72,23 +70,13 @@ enum bongo_cat_frame {
 #define MOD_STATUS_BOTTOM_Y -45
 #define MOD_STATUS_SPACING  2
 
-// 13x13 custom pixel-art modifier icons
-static const uint8_t caps_symbol_map[] = {
-    0x02, 0x00, 0x07, 0x00, 0x0F, 0x80, 0x1F, 0xC0,
-    0x3F, 0xE0, 0x7F, 0xF0, 0x1F, 0xC0, 0x00, 0x00,
-    0x7F, 0xF0, 0x7F, 0xF0, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00
-};
-static const lv_img_dsc_t caps_symbol_img = {
-    .header.cf = LV_IMG_CF_ALPHA_1BIT,
-    .header.always_zero = 0,
-    .header.reserved = 0,
-    .header.w = 13,
-    .header.h = 13,
-    .data_size = sizeof(caps_symbol_map),
-    .data = caps_symbol_map,
-};
+#define CAPS_LOCK_BADGE_W   58
+#define CAPS_LOCK_BADGE_H   20
+#define CAPS_LOCK_BADGE_X   8
+#define CAPS_LOCK_BADGE_Y   8
+#define HID_INDICATOR_CAPS_LOCK (1U << (HID_USAGE_LED_CAPS_LOCK - HID_USAGE_LED_NUM_LOCK))
 
+// 13x13 custom pixel-art modifier icons
 static const uint8_t ctrl_symbol_map[] = {
     0x02, 0x00, 0x07, 0x00, 0x0D, 0x80, 0x18, 0xC0,
     0x30, 0x60, 0x60, 0x30, 0xFF, 0xF8, 0x00, 0x00,
@@ -183,8 +171,9 @@ static lv_obj_t *base_layer_badge;
 static lv_obj_t *base_layer_label;
 static lv_obj_t *fn_layer_badge;
 static lv_obj_t *fn_layer_label;
+static lv_obj_t *caps_lock_badge;
 static lv_obj_t *modifier_status_row;
-static lv_obj_t *mod_boxes[5];
+static lv_obj_t *mod_boxes[4];
 static bool display_screen_ready;
 static bool display_work_ready;
 static enum bongo_cat_frame pending_bongo_frame = BONGO_CAT_RESTING;
@@ -195,9 +184,7 @@ static enum bongo_cat_frame pending_down_frame = BONGO_CAT_LEFT_DOWN;
 static uint8_t active_modifier_counts[8];
 static uint8_t position_modifier_mask;
 static uint8_t pending_modifier_mask;
-#ifdef CONFIG_ZMK_CAPS_WORD
-static bool caps_word_active;
-#endif
+static bool caps_lock_active;
 
 /* Typing speed ring buffer (accessed from both event and LVGL contexts) */
 static int64_t keystroke_times[SPEED_RING_SIZE];
@@ -468,6 +455,31 @@ static int calc_kps_x10(void) {
 /*                       Modifier Status                           */
 /* ══════════════════════════════════════════════════════════════════ */
 
+static void apply_caps_lock_status(void *unused) {
+    ARG_UNUSED(unused);
+
+    if (caps_lock_badge == NULL) {
+        return;
+    }
+
+    if (caps_lock_active) {
+        lv_obj_clear_flag(caps_lock_badge, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(caps_lock_badge, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void set_caps_lock_status(zmk_hid_indicators_t indicators) {
+    bool active = (indicators & HID_INDICATOR_CAPS_LOCK) != 0;
+
+    if (active == caps_lock_active) {
+        return;
+    }
+
+    caps_lock_active = active;
+    lv_async_call(apply_caps_lock_status, NULL);
+}
+
 static void apply_modifier_status(void *unused) {
     ARG_UNUSED(unused);
 
@@ -478,50 +490,36 @@ static void apply_modifier_status(void *unused) {
     uint8_t mods = pending_modifier_mask;
     bool any_active = false;
 
-    // Caps Word
-    bool caps_active = false;
-#ifdef CONFIG_ZMK_CAPS_WORD
-    if (caps_word_active) {
-        caps_active = true;
-    }
-#endif
-    if (caps_active) {
+    // Ctrl
+    if (mods & (MOD_LCTL | MOD_RCTL)) {
         lv_obj_clear_flag(mod_boxes[0], LV_OBJ_FLAG_HIDDEN);
         any_active = true;
     } else {
         lv_obj_add_flag(mod_boxes[0], LV_OBJ_FLAG_HIDDEN);
     }
 
-    // Ctrl
-    if (mods & (MOD_LCTL | MOD_RCTL)) {
+    // Shift
+    if (mods & (MOD_LSFT | MOD_RSFT)) {
         lv_obj_clear_flag(mod_boxes[1], LV_OBJ_FLAG_HIDDEN);
         any_active = true;
     } else {
         lv_obj_add_flag(mod_boxes[1], LV_OBJ_FLAG_HIDDEN);
     }
 
-    // Shift
-    if (mods & (MOD_LSFT | MOD_RSFT)) {
+    // Alt
+    if (mods & (MOD_LALT | MOD_RALT)) {
         lv_obj_clear_flag(mod_boxes[2], LV_OBJ_FLAG_HIDDEN);
         any_active = true;
     } else {
         lv_obj_add_flag(mod_boxes[2], LV_OBJ_FLAG_HIDDEN);
     }
 
-    // Alt
-    if (mods & (MOD_LALT | MOD_RALT)) {
+    // Win
+    if (mods & (MOD_LGUI | MOD_RGUI)) {
         lv_obj_clear_flag(mod_boxes[3], LV_OBJ_FLAG_HIDDEN);
         any_active = true;
     } else {
         lv_obj_add_flag(mod_boxes[3], LV_OBJ_FLAG_HIDDEN);
-    }
-
-    // Win
-    if (mods & (MOD_LGUI | MOD_RGUI)) {
-        lv_obj_clear_flag(mod_boxes[4], LV_OBJ_FLAG_HIDDEN);
-        any_active = true;
-    } else {
-        lv_obj_add_flag(mod_boxes[4], LV_OBJ_FLAG_HIDDEN);
     }
 
     if (any_active) {
@@ -846,6 +844,39 @@ static void create_battery_status(lv_obj_t *screen) {
 /*                       Display Screen Setup                       */
 /* ══════════════════════════════════════════════════════════════════ */
 
+static void create_caps_lock_status(lv_obj_t *screen) {
+    caps_lock_badge = lv_obj_create(screen);
+    clear_obj_style(caps_lock_badge);
+    lv_obj_set_size(caps_lock_badge, CAPS_LOCK_BADGE_W, CAPS_LOCK_BADGE_H);
+    lv_obj_align(caps_lock_badge, LV_ALIGN_TOP_LEFT, CAPS_LOCK_BADGE_X, CAPS_LOCK_BADGE_Y);
+    lv_obj_set_style_bg_color(caps_lock_badge, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(caps_lock_badge, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(caps_lock_badge, 1, LV_PART_MAIN);
+    lv_obj_set_style_border_color(caps_lock_badge, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_radius(caps_lock_badge, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(caps_lock_badge, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t *accent = lv_obj_create(caps_lock_badge);
+    clear_obj_style(accent);
+    lv_obj_set_size(accent, 5, CAPS_LOCK_BADGE_H - 2);
+    lv_obj_align(accent, LV_ALIGN_LEFT_MID, 1, 0);
+    lv_obj_set_style_bg_color(accent, lv_color_hex(0xC63939), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(accent, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_clear_flag(accent, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t *label = lv_label_create(caps_lock_badge);
+    lv_obj_set_style_text_font(label, &silkscreen_bold_16, LV_PART_MAIN);
+    lv_obj_set_style_text_color(label, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_translate_y(label, -1, LV_PART_MAIN);
+    lv_label_set_text(label, "CAPS");
+    lv_obj_align(label, LV_ALIGN_CENTER, 4, 0);
+
+    caps_lock_active =
+        (zmk_hid_indicators_get_current_profile() & HID_INDICATOR_CAPS_LOCK) != 0;
+    apply_caps_lock_status(NULL);
+    lv_obj_move_foreground(caps_lock_badge);
+}
+
 static void create_modifier_status(lv_obj_t *screen) {
     modifier_status_row = lv_obj_create(screen);
     lv_obj_set_size(modifier_status_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
@@ -861,14 +892,13 @@ static void create_modifier_status(lv_obj_t *screen) {
     lv_obj_set_style_pad_column(modifier_status_row, 4, LV_PART_MAIN);
 
     const lv_img_dsc_t *symbols[] = {
-        &caps_symbol_img,
         &ctrl_symbol_img,
         &shift_symbol_img,
         &alt_symbol_img,
         &win_symbol_img
     };
 
-    for (size_t i = 0; i < 5; i++) {
+    for (size_t i = 0; i < 4; i++) {
         // Parent box: solid white background
         mod_boxes[i] = lv_obj_create(modifier_status_row);
         lv_obj_set_size(mod_boxes[i], 23, 23);
@@ -980,6 +1010,7 @@ lv_obj_t *zmk_display_status_screen(void) {
 
     create_battery_status(screen);
     create_bongo_cat(screen);
+    create_caps_lock_status(screen);
     create_layer_status(screen);
     create_modifier_status(screen);
 
@@ -1021,14 +1052,12 @@ static int bongo_cat_listener(const zmk_event_t *eh) {
         return ZMK_EV_EVENT_BUBBLE;
     }
 
-#ifdef CONFIG_ZMK_CAPS_WORD
-    const struct zmk_caps_word_state_changed *caps_ev = as_zmk_caps_word_state_changed(eh);
-    if (caps_ev != NULL) {
-        caps_word_active = caps_ev->active;
-        lv_async_call(apply_modifier_status, NULL);
+    const struct zmk_hid_indicators_changed *indicators_ev =
+        as_zmk_hid_indicators_changed(eh);
+    if (indicators_ev != NULL) {
+        set_caps_lock_status(indicators_ev->indicators);
         return ZMK_EV_EVENT_BUBBLE;
     }
-#endif
 
     const struct zmk_layer_state_changed *layer_ev = as_zmk_layer_state_changed(eh);
     if (layer_ev != NULL) {
@@ -1070,9 +1099,7 @@ static int bongo_cat_listener(const zmk_event_t *eh) {
 }
 
 ZMK_LISTENER(dactyl_bongo_cat, bongo_cat_listener);
-#ifdef CONFIG_ZMK_CAPS_WORD
-ZMK_SUBSCRIPTION(dactyl_bongo_cat, zmk_caps_word_state_changed);
-#endif
+ZMK_SUBSCRIPTION(dactyl_bongo_cat, zmk_hid_indicators_changed);
 ZMK_SUBSCRIPTION(dactyl_bongo_cat, zmk_layer_state_changed);
 ZMK_SUBSCRIPTION(dactyl_bongo_cat, zmk_position_state_changed);
 ZMK_SUBSCRIPTION(dactyl_bongo_cat, zmk_peripheral_battery_state_changed);
