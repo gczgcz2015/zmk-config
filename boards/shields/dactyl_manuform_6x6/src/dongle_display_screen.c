@@ -5,6 +5,7 @@
 #include <zephyr/init.h>
 #include <zephyr/kernel.h>
 #include <zmk/event_manager.h>
+#include <zmk/endpoints.h>
 #include <zmk/events/battery_state_changed.h>
 #include <zmk/events/hid_indicators_changed.h>
 #include <zmk/events/layer_state_changed.h>
@@ -469,8 +470,35 @@ static void apply_caps_lock_status(void *unused) {
     }
 }
 
+static bool caps_lock_indicator_is_active(zmk_hid_indicators_t indicators) {
+    return (indicators & HID_INDICATOR_CAPS_LOCK) != 0;
+}
+
+static zmk_hid_indicators_t get_all_hid_indicators(void) {
+    zmk_hid_indicators_t indicators = 0;
+
+#if IS_ENABLED(CONFIG_ZMK_USB)
+    struct zmk_endpoint_instance usb_endpoint = {
+        .transport = ZMK_TRANSPORT_USB,
+    };
+    indicators |= zmk_hid_indicators_get_profile(usb_endpoint);
+#endif
+
+#if IS_ENABLED(CONFIG_ZMK_BLE)
+    for (uint8_t i = 0; i < ZMK_BLE_PROFILE_COUNT; i++) {
+        struct zmk_endpoint_instance ble_endpoint = {
+            .transport = ZMK_TRANSPORT_BLE,
+        };
+        ble_endpoint.ble.profile_index = i;
+        indicators |= zmk_hid_indicators_get_profile(ble_endpoint);
+    }
+#endif
+
+    return indicators;
+}
+
 static void set_caps_lock_status(zmk_hid_indicators_t indicators) {
-    bool active = (indicators & HID_INDICATOR_CAPS_LOCK) != 0;
+    bool active = caps_lock_indicator_is_active(indicators | get_all_hid_indicators());
 
     if (active == caps_lock_active) {
         return;
@@ -871,8 +899,7 @@ static void create_caps_lock_status(lv_obj_t *screen) {
     lv_label_set_text(label, "CAPS");
     lv_obj_align(label, LV_ALIGN_CENTER, 4, 0);
 
-    caps_lock_active =
-        (zmk_hid_indicators_get_current_profile() & HID_INDICATOR_CAPS_LOCK) != 0;
+    caps_lock_active = caps_lock_indicator_is_active(get_all_hid_indicators());
     apply_caps_lock_status(NULL);
     lv_obj_move_foreground(caps_lock_badge);
 }
