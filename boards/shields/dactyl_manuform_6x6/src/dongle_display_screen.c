@@ -42,16 +42,20 @@ enum bongo_cat_frame {
 #define SPEED_RING_SIZE     32    /* Track last 32 keystrokes             */
 #define SPEED_WINDOW_MS     1200  /* Sliding time window in ms            */
 
+#define DISPLAY_CONTENT_W   280
+#define SCREEN_MARGIN_X     8
+#define SCREEN_MARGIN_Y     8
+
 /*
  * The cat image is 204x120. Use a full-screen transparent container so
  * offsets cannot clip the larger fixed frame.
  */
-#define CAT_CONTAINER_W     240
-#define CAT_CONTAINER_H     135
+#define CAT_CONTAINER_W     DISPLAY_CONTENT_W
+#define CAT_CONTAINER_H     132
 #define CAT_X_OFFSET        0
-#define CAT_Y_OFFSET        8
+#define CAT_Y_OFFSET        0
 #define CAT_CONTAINER_X     0
-#define CAT_CONTAINER_Y     -12
+#define CAT_CONTAINER_Y     -19
 #define CAT_IMAGE_W         204
 #define CAT_IMAGE_H         120
 #define BONGO_RIGHT_FIRST_POSITION 31
@@ -67,14 +71,14 @@ enum bongo_cat_frame {
 /* ──────────────────────── Modifier Status ──────────────────────── */
 
 #define MOD_STATUS_TICK_MS  100
-#define MOD_STATUS_W        232
-#define MOD_STATUS_BOTTOM_Y -45
+#define MOD_STATUS_W        264
+#define MOD_STATUS_BOTTOM_Y -55
 #define MOD_STATUS_SPACING  2
 
 #define CAPS_LOCK_BADGE_W   58
 #define CAPS_LOCK_BADGE_H   20
-#define CAPS_LOCK_BADGE_X   8
-#define CAPS_LOCK_BADGE_Y   8
+#define CAPS_LOCK_BADGE_X   SCREEN_MARGIN_X
+#define CAPS_LOCK_BADGE_Y   SCREEN_MARGIN_Y
 #define HID_INDICATOR_CAPS_LOCK (1U << (HID_USAGE_LED_CAPS_LOCK - HID_USAGE_LED_NUM_LOCK))
 
 // 13x13 custom pixel-art modifier icons
@@ -146,14 +150,20 @@ static const lv_img_dsc_t win_symbol_img = {
 
 #define LAYER_STATUS_W      92
 #define LAYER_FN_INDEX      1
+#define LAYER_STATUS_X      SCREEN_MARGIN_X
+#define LAYER_BASE_Y        SCREEN_MARGIN_Y
+#define LAYER_FN_Y          (LAYER_BASE_Y + 23)
 
 /* ──────────────────────── Battery Status ──────────────────────── */
 
 #define BATTERY_STATUS_H     48
 #define BATTERY_BAR_H        4
-#define BATTERY_ROW_PAD_X    16
-#define BATTERY_ROW_PAD_B    12
+#define BATTERY_ROW_PAD_X    SCREEN_MARGIN_X
+#define BATTERY_ROW_PAD_B    8
 #define BATTERY_ROW_GAP      12
+#define BATTERY_SLOT_STEP    64
+#define BATTERY_SLOT_Y       (BATTERY_STATUS_H - BATTERY_ROW_PAD_B - 12)
+#define BATTERY_WPS_Y        (BATTERY_STATUS_H - BATTERY_ROW_PAD_B - 18)
 #define BATTERY_SLOT_COUNT   CONFIG_ZMK_SPLIT_BLE_CENTRAL_PERIPHERALS
 
 /* ──────────────────────── Static Variables ──────────────────────── */
@@ -648,8 +658,8 @@ static void modifier_status_work_handler(struct k_work *work) {
 
 static void active_label_slide_anim_cb(void *var, int32_t val) {
     lv_obj_t *badge = (lv_obj_t *)var;
-    int32_t y_pos = (badge == fn_layer_badge) ? 31 : 8;
-    lv_obj_align(badge, LV_ALIGN_TOP_RIGHT, -10 + val, y_pos);
+    int32_t y_pos = (badge == fn_layer_badge) ? LAYER_FN_Y : LAYER_BASE_Y;
+    lv_obj_align(badge, LV_ALIGN_TOP_RIGHT, -LAYER_STATUS_X + val, y_pos);
 }
 
 static void trigger_slide_in(lv_obj_t *badge) {
@@ -792,15 +802,12 @@ static void create_battery_status(lv_obj_t *screen) {
     lv_obj_align(battery_status_row, LV_ALIGN_BOTTOM_MID, 0, 0);
     clear_obj_style(battery_status_row);
 
-    // Left battery slots (16px font size, visual height 12px, aligned at bottom y = 123)
-    // Relative position in 48px row: y_pos_16 = 111 - 87 = 24
-    int y_pos_16 = 24;
-
     for (size_t i = 0; i < BATTERY_SLOT_COUNT; i++) {
         lv_obj_t *slot = lv_obj_create(battery_status_row);
         clear_obj_style(slot);
         lv_obj_set_size(slot, LV_SIZE_CONTENT, 12);
-        lv_obj_set_pos(slot, 18 + i * 60, y_pos_16);
+        lv_obj_set_pos(slot, BATTERY_ROW_PAD_X + i * BATTERY_SLOT_STEP,
+                       BATTERY_SLOT_Y);
 
         // Align child widgets horizontally inside the slot
         lv_obj_set_layout(slot, LV_LAYOUT_FLEX);
@@ -862,7 +869,8 @@ static void create_battery_status(lv_obj_t *screen) {
     wps_label = lv_label_create(battery_status_row);
     lv_obj_set_style_text_font(wps_label, &silkscreen_regular_16, LV_PART_MAIN);
     lv_obj_set_style_text_color(wps_label, lv_color_white(), LV_PART_MAIN);
-    lv_obj_align(wps_label, LV_ALIGN_TOP_RIGHT, -18, 20); // 顶端偏移 20px 配合 16px 字体达到底端 aligned
+    lv_obj_align(wps_label, LV_ALIGN_TOP_RIGHT, -BATTERY_ROW_PAD_X,
+                 BATTERY_WPS_Y);
     lv_label_set_text(wps_label, "WPS:000");
 
     apply_battery_status(NULL);
@@ -974,7 +982,8 @@ static void create_layer_status(lv_obj_t *screen) {
     lv_obj_set_flex_align(base_layer_badge, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_left(base_layer_badge, 6, LV_PART_MAIN);
     lv_obj_set_style_pad_right(base_layer_badge, 6, LV_PART_MAIN);
-    lv_obj_align(base_layer_badge, LV_ALIGN_TOP_RIGHT, -10, 8);
+    lv_obj_align(base_layer_badge, LV_ALIGN_TOP_RIGHT, -LAYER_STATUS_X,
+                 LAYER_BASE_Y);
 
     base_layer_label = lv_label_create(base_layer_badge);
     lv_obj_set_style_text_font(base_layer_label, &silkscreen_bold_16, LV_PART_MAIN);
@@ -990,7 +999,8 @@ static void create_layer_status(lv_obj_t *screen) {
     lv_obj_set_flex_align(fn_layer_badge, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_left(fn_layer_badge, 6, LV_PART_MAIN);
     lv_obj_set_style_pad_right(fn_layer_badge, 6, LV_PART_MAIN);
-    lv_obj_align(fn_layer_badge, LV_ALIGN_TOP_RIGHT, -10, 31); // 8 + 20 + 3 = 31
+    lv_obj_align(fn_layer_badge, LV_ALIGN_TOP_RIGHT, -LAYER_STATUS_X,
+                 LAYER_FN_Y);
 
     fn_layer_label = lv_label_create(fn_layer_badge);
     lv_obj_set_style_text_font(fn_layer_label, &silkscreen_bold_16, LV_PART_MAIN);
