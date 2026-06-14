@@ -51,13 +51,14 @@ enum bongo_cat_frame {
  * offsets cannot clip the larger fixed frame.
  */
 #define CAT_CONTAINER_W     DISPLAY_CONTENT_W
-#define CAT_CONTAINER_H     132
+#define CAT_CONTAINER_H     150
 #define CAT_X_OFFSET        0
 #define CAT_Y_OFFSET        0
 #define CAT_CONTAINER_X     0
-#define CAT_CONTAINER_Y     -19
+#define CAT_CONTAINER_Y     -25
 #define CAT_IMAGE_W         204
 #define CAT_IMAGE_H         120
+#define CAT_IMAGE_ZOOM      288
 #define BONGO_RIGHT_FIRST_POSITION 31
 #define LEFT_TAP_MASK_X     49
 #define LEFT_TAP_MASK_Y     80
@@ -158,8 +159,8 @@ static const lv_img_dsc_t win_symbol_img = {
 
 #define BATTERY_STATUS_H     48
 #define BATTERY_BAR_H        4
-#define BATTERY_ROW_PAD_X    SCREEN_MARGIN_X
-#define BATTERY_ROW_PAD_B    8
+#define BATTERY_ROW_PAD_X    (SCREEN_MARGIN_X + 8)
+#define BATTERY_ROW_PAD_B    12
 #define BATTERY_ROW_GAP      12
 #define BATTERY_SLOT_STEP    64
 #define BATTERY_SLOT_Y       (BATTERY_STATUS_H - BATTERY_ROW_PAD_B - 12)
@@ -268,6 +269,11 @@ static void bongo_frame_offset(enum bongo_cat_frame frame, int16_t *x, int16_t *
     }
 }
 
+static int16_t scale_cat_px(int16_t px) {
+    return (int16_t)((px * CAT_IMAGE_ZOOM + (LV_IMG_ZOOM_NONE / 2)) /
+                     LV_IMG_ZOOM_NONE);
+}
+
 static void set_tap_mask(lv_obj_t *mask, int16_t img_x, int16_t img_y,
                          int16_t mask_x, int16_t mask_y,
                          int16_t mask_w, int16_t mask_h) {
@@ -275,8 +281,9 @@ static void set_tap_mask(lv_obj_t *mask, int16_t img_x, int16_t img_y,
         return;
     }
 
-    lv_obj_set_size(mask, mask_w, mask_h);
-    lv_obj_set_pos(mask, img_x + mask_x, img_y + mask_y);
+    lv_obj_set_size(mask, scale_cat_px(mask_w), scale_cat_px(mask_h));
+    lv_obj_set_pos(mask, img_x + scale_cat_px(mask_x),
+                   img_y + scale_cat_px(mask_y));
     lv_obj_clear_flag(mask, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(mask);
 }
@@ -290,8 +297,8 @@ static void apply_tap_masks(enum bongo_cat_frame frame, int16_t frame_x,
         lv_obj_add_flag(right_tap_mask, LV_OBJ_FLAG_HIDDEN);
     }
 
-    int16_t img_x = (CAT_CONTAINER_W - CAT_IMAGE_W) / 2 + frame_x;
-    int16_t img_y = (CAT_CONTAINER_H - CAT_IMAGE_H) / 2 + frame_y;
+    int16_t img_x = (CAT_CONTAINER_W - scale_cat_px(CAT_IMAGE_W)) / 2 + frame_x;
+    int16_t img_y = (CAT_CONTAINER_H - scale_cat_px(CAT_IMAGE_H)) / 2 + frame_y;
 
     switch (frame) {
     case BONGO_CAT_LEFT_UP:
@@ -1022,6 +1029,8 @@ static void create_bongo_cat(lv_obj_t *screen) {
 
     bongo_cat_img = lv_img_create(cat_container);
     lv_img_set_src(bongo_cat_img, &bongo_resting);
+    lv_img_set_zoom(bongo_cat_img, CAT_IMAGE_ZOOM);
+    lv_img_set_antialias(bongo_cat_img, false);
     lv_obj_align(bongo_cat_img, LV_ALIGN_CENTER, CAT_X_OFFSET, CAT_Y_OFFSET);
 
     left_tap_mask = lv_obj_create(cat_container);
