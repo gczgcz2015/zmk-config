@@ -11,7 +11,7 @@ static int dongle_display_rotate_init(void) {
         return -ENODEV;
     }
 
-    return display_set_orientation(display, DISPLAY_ORIENTATION_ROTATED_270);
+    return display_set_orientation(display, DISPLAY_ORIENTATION_NORMAL);
 }
 
 SYS_INIT(dongle_display_rotate_init, APPLICATION, 60);
