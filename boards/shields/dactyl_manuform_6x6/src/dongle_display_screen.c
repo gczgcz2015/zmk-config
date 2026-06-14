@@ -76,10 +76,10 @@ enum bongo_cat_frame {
 #define MOD_STATUS_BOTTOM_Y -55
 #define MOD_STATUS_SPACING  2
 
-#define CAPS_LOCK_BADGE_W   58
+#define CAPS_LOCK_BADGE_W   66
 #define CAPS_LOCK_BADGE_H   20
-#define CAPS_LOCK_BADGE_X   SCREEN_MARGIN_X
-#define CAPS_LOCK_BADGE_Y   SCREEN_MARGIN_Y
+#define CAPS_LOCK_BADGE_X   (SCREEN_MARGIN_X + 8)
+#define CAPS_LOCK_BADGE_Y   (SCREEN_MARGIN_Y + 8)
 #define HID_INDICATOR_CAPS_LOCK (1U << (HID_USAGE_LED_CAPS_LOCK - HID_USAGE_LED_NUM_LOCK))
 
 // 13x13 custom pixel-art modifier icons
@@ -151,8 +151,8 @@ static const lv_img_dsc_t win_symbol_img = {
 
 #define LAYER_STATUS_W      92
 #define LAYER_FN_INDEX      1
-#define LAYER_STATUS_X      SCREEN_MARGIN_X
-#define LAYER_BASE_Y        SCREEN_MARGIN_Y
+#define LAYER_STATUS_X      (SCREEN_MARGIN_X + 8)
+#define LAYER_BASE_Y        (SCREEN_MARGIN_Y + 8)
 #define LAYER_FN_Y          (LAYER_BASE_Y + 23)
 
 /* ──────────────────────── Battery Status ──────────────────────── */
@@ -912,7 +912,7 @@ static void create_caps_lock_status(lv_obj_t *screen) {
     lv_obj_set_style_text_color(label, lv_color_white(), LV_PART_MAIN);
     lv_obj_set_style_translate_y(label, -1, LV_PART_MAIN);
     lv_label_set_text(label, "CAPS");
-    lv_obj_align(label, LV_ALIGN_CENTER, 4, 0);
+    lv_obj_align(label, LV_ALIGN_CENTER, 3, 0);
 
     caps_lock_active = caps_lock_indicator_is_active(get_all_hid_indicators());
     apply_caps_lock_status(NULL);
