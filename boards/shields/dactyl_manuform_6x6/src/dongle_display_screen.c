@@ -423,11 +423,16 @@ static void trigger_typing_frame(bool left_hand) {
         return;
     }
 
-    pending_down_frame = left_hand ? BONGO_CAT_LEFT_DOWN : BONGO_CAT_RIGHT_DOWN;
+    /*
+     * The viewer sees the cat mirrored: the cat's left paw is on screen-right,
+     * and the cat's right paw is on screen-left. Match the user's hand side to
+     * the cat's own hand side, not the screen side.
+     */
+    pending_down_frame = left_hand ? BONGO_CAT_RIGHT_DOWN : BONGO_CAT_LEFT_DOWN;
 
     k_work_cancel_delayable(&bongo_down_work);
     k_work_cancel_delayable(&bongo_return_work);
-    schedule_bongo_frame(left_hand ? BONGO_CAT_LEFT_UP : BONGO_CAT_RIGHT_UP,
+    schedule_bongo_frame(left_hand ? BONGO_CAT_RIGHT_UP : BONGO_CAT_LEFT_UP,
                          K_NO_WAIT);
     k_work_reschedule(&bongo_down_work, K_MSEC(BONGO_DOWN_MS));
 }
