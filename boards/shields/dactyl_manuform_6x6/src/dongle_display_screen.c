@@ -6,6 +6,7 @@
 #include <zephyr/kernel.h>
 #include <zmk/event_manager.h>
 #include <zmk/endpoints.h>
+#include <zmk/events/activity_state_changed.h>
 #include <zmk/events/battery_state_changed.h>
 #include <zmk/events/hid_indicators_changed.h>
 #include <zmk/events/layer_state_changed.h>
@@ -188,6 +189,7 @@ static lv_obj_t *modifier_status_row;
 static lv_obj_t *mod_boxes[4];
 static bool display_screen_ready;
 static bool display_work_ready;
+static bool display_activity_active = true;
 static enum bongo_cat_frame pending_bongo_frame = BONGO_CAT_RESTING;
 static uint8_t active_key_count;
 static bool busy_tick_running;
@@ -341,7 +343,7 @@ static void bongo_frame_work_handler(struct k_work *work) {
 }
 
 static void schedule_bongo_frame(enum bongo_cat_frame frame, k_timeout_t delay) {
-    if (!display_work_ready) {
+    if (!display_work_ready || !display_activity_active) {
         return;
     }
 
@@ -369,7 +371,8 @@ static void bongo_down_work_handler(struct k_work *work) {
 static void bongo_busy_work_handler(struct k_work *work) {
     ARG_UNUSED(work);
 
-    if (!display_screen_ready || calc_kps_x10() < BONGO_BUSY_KPS_X10) {
+    if (!display_screen_ready || !display_activity_active ||
+        calc_kps_x10() < BONGO_BUSY_KPS_X10) {
         busy_tick_running = false;
         busy_phase = 0;
         schedule_bongo_frame(BONGO_CAT_RESTING, K_NO_WAIT);
@@ -389,7 +392,7 @@ static void bongo_busy_work_handler(struct k_work *work) {
 }
 
 static void start_busy_animation(void) {
-    if (!display_work_ready) {
+    if (!display_work_ready || !display_activity_active) {
         return;
     }
 
@@ -416,7 +419,7 @@ static void stop_busy_animation(void) {
 }
 
 static void trigger_typing_frame(bool left_hand) {
-    if (!display_work_ready) {
+    if (!display_work_ready || !display_activity_active) {
         return;
     }
 
@@ -641,7 +644,7 @@ static void update_modifier_status_from_position(uint32_t position, bool pressed
 static void modifier_status_work_handler(struct k_work *work) {
     ARG_UNUSED(work);
 
-    if (!display_screen_ready) {
+    if (!display_screen_ready || !display_activity_active) {
         return;
     }
 
@@ -657,6 +660,35 @@ static void modifier_status_work_handler(struct k_work *work) {
     }
 
     k_work_reschedule(&modifier_status_work, K_MSEC(MOD_STATUS_TICK_MS));
+}
+
+static void set_display_activity_active(bool active) {
+    if (display_activity_active == active) {
+        return;
+    }
+
+    display_activity_active = active;
+
+    if (!display_work_ready) {
+        return;
+    }
+
+    if (active) {
+        if (display_screen_ready) {
+            schedule_bongo_frame(BONGO_CAT_RESTING, K_NO_WAIT);
+            k_work_reschedule(&modifier_status_work, K_NO_WAIT);
+        }
+        return;
+    }
+
+    busy_tick_running = false;
+    busy_phase = 0;
+    active_key_count = 0;
+    k_work_cancel_delayable(&bongo_frame_work);
+    k_work_cancel_delayable(&bongo_down_work);
+    k_work_cancel_delayable(&bongo_return_work);
+    k_work_cancel_delayable(&bongo_busy_work);
+    k_work_cancel_delayable(&modifier_status_work);
 }
 
 /* ══════════════════════════════════════════════════════════════════ */
@@ -1062,7 +1094,7 @@ lv_obj_t *zmk_display_status_screen(void) {
 
     display_screen_ready = true;
 
-    if (display_work_ready) {
+    if (display_work_ready && display_activity_active) {
         k_work_reschedule(&modifier_status_work, K_NO_WAIT);
     }
 
@@ -1077,7 +1109,7 @@ static int display_screen_init(void) {
     k_work_init_delayable(&modifier_status_work, modifier_status_work_handler);
     display_work_ready = true;
 
-    if (display_screen_ready) {
+    if (display_screen_ready && display_activity_active) {
         k_work_reschedule(&modifier_status_work, K_NO_WAIT);
     }
 
@@ -1091,6 +1123,13 @@ SYS_INIT(display_screen_init, APPLICATION, CONFIG_APPLICATION_INIT_PRIORITY);
 /* ══════════════════════════════════════════════════════════════════ */
 
 static int bongo_cat_listener(const zmk_event_t *eh) {
+    const struct zmk_activity_state_changed *activity_ev =
+        as_zmk_activity_state_changed(eh);
+    if (activity_ev != NULL) {
+        set_display_activity_active(activity_ev->state == ZMK_ACTIVITY_ACTIVE);
+        return ZMK_EV_EVENT_BUBBLE;
+    }
+
     const struct zmk_peripheral_battery_state_changed *battery_ev =
         as_zmk_peripheral_battery_state_changed(eh);
     if (battery_ev != NULL) {
@@ -1145,6 +1184,7 @@ static int bongo_cat_listener(const zmk_event_t *eh) {
 }
 
 ZMK_LISTENER(dactyl_bongo_cat, bongo_cat_listener);
+ZMK_SUBSCRIPTION(dactyl_bongo_cat, zmk_activity_state_changed);
 ZMK_SUBSCRIPTION(dactyl_bongo_cat, zmk_hid_indicators_changed);
 ZMK_SUBSCRIPTION(dactyl_bongo_cat, zmk_layer_state_changed);
 ZMK_SUBSCRIPTION(dactyl_bongo_cat, zmk_position_state_changed);

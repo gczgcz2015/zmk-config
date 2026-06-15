@@ -1,4 +1,7 @@
 .codex
+.codegraph/
+.antigravitycli/
+.DS_Store
 
 .zmk/
 firmware/
