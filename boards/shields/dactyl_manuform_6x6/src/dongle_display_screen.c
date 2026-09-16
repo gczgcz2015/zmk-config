@@ -17,7 +17,6 @@
 #include <zmk/events/endpoint_changed.h>
 #include <zmk/events/keycode_state_changed.h>
 #include <zmk/events/layer_state_changed.h>
-#include <zmk/events/split_central_status_changed.h>
 #include <zmk/events/wpm_state_changed.h>
 #include <zmk/hid.h>
 #include <zmk/keymap.h>
@@ -468,11 +467,6 @@ struct battery_update_state {
     uint8_t level;
 };
 
-struct connection_update_state {
-    uint8_t source;
-    bool connected;
-};
-
 static void update_peripheral_display(uint8_t source) {
     if (source >= PERIPHERAL_COUNT || peripheral_arcs[source] == NULL) {
         return;
@@ -516,6 +510,8 @@ static void battery_update_cb(struct battery_update_state state) {
     }
 
     peripheral_battery[state.source] = state.level;
+    /* ZMK v0.3 exposes split battery updates but not a public connection event. */
+    peripheral_connected[state.source] = state.level > 0;
     update_peripheral_display(state.source);
 }
 
@@ -539,36 +535,6 @@ static struct battery_update_state battery_get_state(const zmk_event_t *eh) {
 ZMK_DISPLAY_WIDGET_LISTENER(dongle_battery, struct battery_update_state,
                             battery_update_cb, battery_get_state)
 ZMK_SUBSCRIPTION(dongle_battery, zmk_peripheral_battery_state_changed)
-
-static void connection_update_cb(struct connection_update_state state) {
-    if (state.source >= PERIPHERAL_COUNT) {
-        return;
-    }
-
-    peripheral_connected[state.source] = state.connected;
-    update_peripheral_display(state.source);
-}
-
-static struct connection_update_state connection_get_state(const zmk_event_t *eh) {
-    if (eh == NULL) {
-        return (struct connection_update_state){.source = 0, .connected = false};
-    }
-
-    const struct zmk_split_central_status_changed *event =
-        as_zmk_split_central_status_changed(eh);
-    if (event == NULL) {
-        return (struct connection_update_state){.source = 0, .connected = false};
-    }
-
-    return (struct connection_update_state){
-        .source = event->slot,
-        .connected = event->connected,
-    };
-}
-
-ZMK_DISPLAY_WIDGET_LISTENER(dongle_connection, struct connection_update_state,
-                            connection_update_cb, connection_get_state)
-ZMK_SUBSCRIPTION(dongle_connection, zmk_split_central_status_changed)
 
 int zmk_widget_battery_circles_init(struct zmk_widget_battery_circles *widget,
                                     lv_obj_t *parent) {
@@ -625,7 +591,6 @@ int zmk_widget_battery_circles_init(struct zmk_widget_battery_circles *widget,
     }
 
     dongle_battery_init();
-    dongle_connection_init();
     return 0;
 }
 
