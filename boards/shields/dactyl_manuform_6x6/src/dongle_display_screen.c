@@ -647,7 +647,7 @@ static void output_update_cb(struct output_state state) {
 
 static struct output_state output_get_state(const zmk_event_t *eh) {
     ARG_UNUSED(eh);
-    struct zmk_endpoint_instance selected = zmk_endpoint_get_selected();
+    struct zmk_endpoint_instance selected = zmk_endpoints_selected();
     return (struct output_state){
         .transport = selected.transport,
         .profile_index = (uint8_t)zmk_ble_active_profile_index(),
