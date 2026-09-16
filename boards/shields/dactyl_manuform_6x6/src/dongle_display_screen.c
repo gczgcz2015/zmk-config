@@ -1,1196 +1,793 @@
+#include <ctype.h>
 #include <lvgl.h>
-#include <stddef.h>
+#include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
+
 #include <dt-bindings/zmk/modifiers.h>
 #include <zephyr/init.h>
 #include <zephyr/kernel.h>
-#include <zmk/event_manager.h>
+
+#include <zmk/ble.h>
+#include <zmk/display.h>
 #include <zmk/endpoints.h>
-#include <zmk/events/activity_state_changed.h>
+#include <zmk/event_manager.h>
 #include <zmk/events/battery_state_changed.h>
-#include <zmk/events/hid_indicators_changed.h>
+#include <zmk/events/ble_active_profile_changed.h>
+#include <zmk/events/endpoint_changed.h>
+#include <zmk/events/keycode_state_changed.h>
 #include <zmk/events/layer_state_changed.h>
-#include <zmk/events/position_state_changed.h>
+#include <zmk/events/split_central_status_changed.h>
+#include <zmk/events/wpm_state_changed.h>
 #include <zmk/hid.h>
-#include <zmk/hid_indicators.h>
 #include <zmk/keymap.h>
+#include <zmk/wpm.h>
 
-#include "bongo_cat_art.h"
+LV_FONT_DECLARE(DINishExpanded_Light_36);
+LV_FONT_DECLARE(DINish_Medium_24);
+LV_FONT_DECLARE(FG_Medium_20);
+LV_FONT_DECLARE(FR_Medium_32);
 
-LV_FONT_DECLARE(silkscreen_bold_16);
-LV_FONT_DECLARE(silkscreen_regular_14);
-LV_FONT_DECLARE(silkscreen_regular_16);
+/* Operator layout palette from the reference Prospector screen. */
+#define DISPLAY_COLOR_MOD_ACTIVE 0xb1e5f0
+#define DISPLAY_COLOR_MOD_INACTIVE 0x3b527c
 
-/* ──────────────────────── Bongo Cat Settings ──────────────────────── */
+#define DISPLAY_COLOR_WPM_BAR_ACTIVE 0xc2526a
+#define DISPLAY_COLOR_WPM_BAR_INACTIVE 0x242424
+#define DISPLAY_COLOR_WPM_TEXT 0xc2526a
 
-#define BONGO_ACTIVE_MS     110
-#define BONGO_DOWN_MS       80
-#define BONGO_BUSY_TICK_MS  120
-#define BONGO_BUSY_KPS_X10  45
+#define DISPLAY_COLOR_LAYER_TEXT 0xffffff
+#define DISPLAY_COLOR_LAYER_DOT_ACTIVE 0xe0e0e0
+#define DISPLAY_COLOR_LAYER_DOT_INACTIVE 0x575757
 
-enum bongo_cat_frame {
-    BONGO_CAT_RESTING,
-    BONGO_CAT_LEFT_UP,
-    BONGO_CAT_LEFT_DOWN,
-    BONGO_CAT_RIGHT_UP,
-    BONGO_CAT_RIGHT_DOWN,
-    BONGO_CAT_BUSY,
-    BONGO_CAT_BOTH,
+#define DISPLAY_COLOR_BATTERY_FILL 0x54806c
+#define DISPLAY_COLOR_BATTERY_RING 0x2a4036
+#define DISPLAY_COLOR_BATTERY_DISCONNECTED_FILL 0x383c42
+#define DISPLAY_COLOR_BATTERY_DISCONNECTED_RING 0x282c30
+#define DISPLAY_COLOR_BATTERY_LOW_FILL 0xc08040
+#define DISPLAY_COLOR_BATTERY_LOW_RING 0x584028
+
+#define DISPLAY_COLOR_USB_ACTIVE_BG 0xb9b9a7
+#define DISPLAY_COLOR_USB_INACTIVE_BG 0x4f4f40
+#define DISPLAY_COLOR_BLE_ACTIVE_BG 0x569fa7
+#define DISPLAY_COLOR_BLE_INACTIVE_BG 0x353f40
+#define DISPLAY_COLOR_OUTPUT_ACTIVE_TEXT 0x000000
+#define DISPLAY_COLOR_OUTPUT_INACTIVE_TEXT 0x7b7d93
+
+#define DISPLAY_COLOR_SLOT_ACTIVE_BG 0x7b7d93
+#define DISPLAY_COLOR_SLOT_INACTIVE_BG 0x353640
+
+/* ───────────────────────────── Widget types ─────────────────────────── */
+
+#define WPM_BAR_COUNT 26
+#define WPM_MAX 120
+#define PERIPHERAL_COUNT ZMK_SPLIT_BLE_PERIPHERAL_COUNT
+#define LOW_BATTERY_THRESHOLD 20
+#define LAYER_DOT_COUNT ZMK_KEYMAP_LAYERS_LEN
+
+struct zmk_widget_wpm_meter {
+    sys_snode_t node;
+    lv_obj_t *obj;
+    lv_obj_t *bars[WPM_BAR_COUNT];
+    lv_obj_t *peak_indicator;
+    lv_obj_t *wpm_label;
+    lv_obj_t *layer_label;
 };
 
-/* ──────────────────────── Typing Speed Tracker ──────────────────────── */
-
-#define SPEED_RING_SIZE     32    /* Track last 32 keystrokes             */
-#define SPEED_WINDOW_MS     1200  /* Sliding time window in ms            */
-
-#define DISPLAY_CONTENT_W   280
-#define SCREEN_MARGIN_X     8
-#define SCREEN_MARGIN_Y     8
-
-/*
- * The cat image is 204x120. Use a full-screen transparent container so
- * offsets cannot clip the larger fixed frame.
- */
-#define CAT_CONTAINER_W     DISPLAY_CONTENT_W
-#define CAT_CONTAINER_H     150
-#define CAT_X_OFFSET        0
-#define CAT_Y_OFFSET        0
-#define CAT_CONTAINER_X     0
-#define CAT_CONTAINER_Y     -25
-#define CAT_IMAGE_W         204
-#define CAT_IMAGE_H         120
-#define CAT_IMAGE_ZOOM      288
-#define BONGO_RIGHT_FIRST_POSITION 31
-#define LEFT_TAP_MASK_X     49
-#define LEFT_TAP_MASK_Y     80
-#define LEFT_TAP_MASK_W     25
-#define LEFT_TAP_MASK_H     13
-#define RIGHT_TAP_MASK_X    109
-#define RIGHT_TAP_MASK_Y    89
-#define RIGHT_TAP_MASK_W    31
-#define RIGHT_TAP_MASK_H    12
-
-/* ──────────────────────── Modifier Status ──────────────────────── */
-
-#define MOD_STATUS_TICK_MS  100
-#define MOD_STATUS_W        264
-#define MOD_STATUS_BOTTOM_Y -55
-#define MOD_STATUS_SPACING  2
-
-#define CAPS_LOCK_BADGE_W   66
-#define CAPS_LOCK_BADGE_H   20
-#define CAPS_LOCK_BADGE_X   (SCREEN_MARGIN_X + 8)
-#define CAPS_LOCK_BADGE_Y   (SCREEN_MARGIN_Y + 8)
-#define HID_INDICATOR_CAPS_LOCK (1U << (HID_USAGE_LED_CAPS_LOCK - HID_USAGE_LED_NUM_LOCK))
-
-// 13x13 custom pixel-art modifier icons
-static const uint8_t ctrl_symbol_map[] = {
-    0x02, 0x00, 0x07, 0x00, 0x0D, 0x80, 0x18, 0xC0,
-    0x30, 0x60, 0x60, 0x30, 0xFF, 0xF8, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00
-};
-static const lv_img_dsc_t ctrl_symbol_img = {
-    .header.cf = LV_IMG_CF_ALPHA_1BIT,
-    .header.always_zero = 0,
-    .header.reserved = 0,
-    .header.w = 13,
-    .header.h = 13,
-    .data_size = sizeof(ctrl_symbol_map),
-    .data = ctrl_symbol_map,
+struct layer_dots_widget {
+    sys_snode_t node;
+    lv_obj_t *obj;
+    lv_obj_t *dots[LAYER_DOT_COUNT];
 };
 
-static const uint8_t shift_symbol_map[] = {
-    0x02, 0x00, 0x07, 0x00, 0x0F, 0x80, 0x1F, 0xC0,
-    0x3F, 0xE0, 0x7F, 0xF0, 0x1F, 0xC0, 0x1F, 0xC0,
-    0x1F, 0xC0, 0x1F, 0xC0, 0x1F, 0xC0, 0x1F, 0xC0,
-    0x00, 0x00
-};
-static const lv_img_dsc_t shift_symbol_img = {
-    .header.cf = LV_IMG_CF_ALPHA_1BIT,
-    .header.always_zero = 0,
-    .header.reserved = 0,
-    .header.w = 13,
-    .header.h = 13,
-    .data_size = sizeof(shift_symbol_map),
-    .data = shift_symbol_map,
+struct zmk_widget_modifier_indicator {
+    sys_snode_t node;
+    lv_obj_t *obj;
+    lv_obj_t *mod_labels[4];
 };
 
-static const uint8_t alt_symbol_map[] = {
-    0x00, 0x00, 0xF0, 0x00, 0x1C, 0x00, 0x07, 0x00,
-    0x01, 0xC0, 0x00, 0x78, 0x00, 0x00, 0x7F, 0xF0,
-    0x7F, 0xF0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00
-};
-static const lv_img_dsc_t alt_symbol_img = {
-    .header.cf = LV_IMG_CF_ALPHA_1BIT,
-    .header.always_zero = 0,
-    .header.reserved = 0,
-    .header.w = 13,
-    .header.h = 13,
-    .data_size = sizeof(alt_symbol_map),
-    .data = alt_symbol_map,
+struct zmk_widget_battery_circles {
+    sys_snode_t node;
+    lv_obj_t *obj;
 };
 
-static const uint8_t win_symbol_map[] = {
-    0x00, 0x00, 0x38, 0xE0, 0x6D, 0xB0, 0x6D, 0xB0,
-    0x3F, 0xE0, 0x08, 0x80, 0x3F, 0xE0, 0x6D, 0xB0,
-    0x6D, 0xB0, 0x38, 0xE0, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00
-};
-static const lv_img_dsc_t win_symbol_img = {
-    .header.cf = LV_IMG_CF_ALPHA_1BIT,
-    .header.always_zero = 0,
-    .header.reserved = 0,
-    .header.w = 13,
-    .header.h = 13,
-    .data_size = sizeof(win_symbol_map),
-    .data = win_symbol_map,
+struct zmk_widget_output {
+    sys_snode_t node;
+    lv_obj_t *obj;
+    lv_obj_t *usb_btn;
+    lv_obj_t *ble_btn;
+    lv_obj_t *slots[ZMK_BLE_PROFILE_COUNT];
 };
 
-/* ──────────────────────── Layer Status ──────────────────────── */
+static sys_slist_t wpm_widgets = SYS_SLIST_STATIC_INIT(&wpm_widgets);
+static sys_slist_t layer_dots_widgets = SYS_SLIST_STATIC_INIT(&layer_dots_widgets);
+static sys_slist_t modifier_widgets = SYS_SLIST_STATIC_INIT(&modifier_widgets);
+static sys_slist_t output_widgets = SYS_SLIST_STATIC_INIT(&output_widgets);
 
-#define LAYER_STATUS_W      92
-#define LAYER_FN_INDEX      1
-#define LAYER_STATUS_X      (SCREEN_MARGIN_X + 8)
-#define LAYER_BASE_Y        (SCREEN_MARGIN_Y + 8)
-#define LAYER_FN_Y          (LAYER_BASE_Y + 23)
+/* ───────────────────────────── WPM meter ───────────────────────────── */
 
-/* ──────────────────────── Battery Status ──────────────────────── */
+static struct k_work_delayable wpm_smooth_work;
+static bool wpm_work_initialized;
+static float displayed_wpm;
+static float target_wpm;
+static int previous_active_bars;
+static int peak_position;
+static int peak_hold_counter;
+static int peak_decay_counter;
 
-#define BATTERY_STATUS_H     48
-#define BATTERY_BAR_H        4
-#define BATTERY_ROW_PAD_X    (SCREEN_MARGIN_X + 8)
-#define BATTERY_ROW_PAD_B    12
-#define BATTERY_ROW_GAP      12
-#define BATTERY_SLOT_STEP    64
-#define BATTERY_SLOT_Y       (BATTERY_STATUS_H - BATTERY_ROW_PAD_B - 12)
-#define BATTERY_WPS_Y        (BATTERY_STATUS_H - BATTERY_ROW_PAD_B - 18)
-#define BATTERY_SLOT_COUNT   CONFIG_ZMK_SPLIT_BLE_CENTRAL_PERIPHERALS
+static const float smoothing_factor_up = 0.3f;
+static const float smoothing_factor_down = 0.05f;
 
-/* ──────────────────────── Static Variables ──────────────────────── */
-
-/* Bongo cat */
-static struct k_work_delayable bongo_frame_work;
-static struct k_work_delayable bongo_down_work;
-static struct k_work_delayable bongo_return_work;
-static struct k_work_delayable bongo_busy_work;
-static struct k_work_delayable modifier_status_work;
-static lv_obj_t *bongo_cat_img;
-static lv_obj_t *cat_container;
-static lv_obj_t *left_tap_mask;
-static lv_obj_t *right_tap_mask;
-static lv_obj_t *base_layer_badge;
-static lv_obj_t *base_layer_label;
-static lv_obj_t *fn_layer_badge;
-static lv_obj_t *fn_layer_label;
-static lv_obj_t *caps_lock_badge;
-static lv_obj_t *modifier_status_row;
-static lv_obj_t *mod_boxes[4];
-static bool display_screen_ready;
-static bool display_work_ready;
-static bool display_activity_active = true;
-static enum bongo_cat_frame pending_bongo_frame = BONGO_CAT_RESTING;
-static uint8_t active_key_count;
-static bool busy_tick_running;
-static uint8_t busy_phase;
-static enum bongo_cat_frame pending_down_frame = BONGO_CAT_LEFT_DOWN;
-static uint8_t active_modifier_counts[8];
-static uint8_t position_modifier_mask;
-static uint8_t pending_modifier_mask;
-static bool caps_lock_active;
-
-/* Typing speed ring buffer (accessed from both event and LVGL contexts) */
-static int64_t keystroke_times[SPEED_RING_SIZE];
-static uint8_t speed_ring_head;
-static uint8_t speed_ring_count;
-static struct k_spinlock speed_lock;
-
-struct battery_slot_obj {
-    lv_obj_t *icon_body;
-    lv_obj_t *icon_cap;
-    lv_obj_t *bar;
-    lv_obj_t *num;
+struct wpm_meter_state {
+    uint8_t wpm;
 };
 
-static lv_obj_t *battery_status_row;
-static struct battery_slot_obj battery_slots[BATTERY_SLOT_COUNT];
-static uint8_t battery_levels[BATTERY_SLOT_COUNT];
-static bool battery_level_known[BATTERY_SLOT_COUNT];
-static bool battery_connected[BATTERY_SLOT_COUNT];
-static struct k_spinlock battery_lock;
-static lv_obj_t *wps_label;
+static void wpm_meter_render(int active_bars) {
+    struct zmk_widget_wpm_meter *widget;
 
-/* ══════════════════════════════════════════════════════════════════ */
-/*                       Bongo Cat Animation                        */
-/* ══════════════════════════════════════════════════════════════════ */
-
-static int calc_kps_x10(void);
-
-static const lv_img_dsc_t *bongo_frame_image(enum bongo_cat_frame frame) {
-    switch (frame) {
-    case BONGO_CAT_LEFT_UP:
-        return &bongo_casualright;
-    case BONGO_CAT_LEFT_DOWN:
-    case BONGO_CAT_RIGHT_DOWN:
-        return &bongo_both;
-    case BONGO_CAT_RIGHT_UP:
-        return &bongo_casualleft;
-    case BONGO_CAT_BUSY:
-        return &bongo_busy;
-    case BONGO_CAT_BOTH:
-        return &bongo_both;
-    case BONGO_CAT_RESTING:
-    default:
-        return &bongo_resting;
-    }
-}
-
-static void bongo_frame_offset(enum bongo_cat_frame frame, int16_t *x, int16_t *y) {
-    *x = CAT_X_OFFSET;
-    *y = CAT_Y_OFFSET;
-
-    switch (frame) {
-    case BONGO_CAT_LEFT_UP:
-        *x -= 4;
-        *y += 1;
-        break;
-    case BONGO_CAT_RIGHT_UP:
-        *y -= 1;
-        break;
-    case BONGO_CAT_BUSY:
-        *x -= 5;
-        *y -= 2;
-        break;
-    case BONGO_CAT_LEFT_DOWN:
-    case BONGO_CAT_RIGHT_DOWN:
-    case BONGO_CAT_BOTH:
-    case BONGO_CAT_RESTING:
-    default:
-        break;
-    }
-}
-
-static int16_t scale_cat_px(int16_t px) {
-    return (int16_t)((px * CAT_IMAGE_ZOOM + (LV_IMG_ZOOM_NONE / 2)) /
-                     LV_IMG_ZOOM_NONE);
-}
-
-static void set_tap_mask(lv_obj_t *mask, int16_t img_x, int16_t img_y,
-                         int16_t mask_x, int16_t mask_y,
-                         int16_t mask_w, int16_t mask_h) {
-    if (mask == NULL) {
-        return;
+    if (active_bars < 0) {
+        active_bars = 0;
+    } else if (active_bars > WPM_BAR_COUNT) {
+        active_bars = WPM_BAR_COUNT;
     }
 
-    lv_obj_set_size(mask, scale_cat_px(mask_w), scale_cat_px(mask_h));
-    lv_obj_set_pos(mask, img_x + scale_cat_px(mask_x),
-                   img_y + scale_cat_px(mask_y));
-    lv_obj_clear_flag(mask, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_move_foreground(mask);
-}
+    SYS_SLIST_FOR_EACH_CONTAINER(&wpm_widgets, widget, node) {
+        if (active_bars != previous_active_bars) {
+            int min_bar = (active_bars < previous_active_bars) ? active_bars
+                                                                : previous_active_bars;
+            int max_bar = (active_bars > previous_active_bars) ? active_bars
+                                                                : previous_active_bars;
 
-static void apply_tap_masks(enum bongo_cat_frame frame, int16_t frame_x,
-                            int16_t frame_y) {
-    if (left_tap_mask != NULL) {
-        lv_obj_add_flag(left_tap_mask, LV_OBJ_FLAG_HIDDEN);
-    }
-    if (right_tap_mask != NULL) {
-        lv_obj_add_flag(right_tap_mask, LV_OBJ_FLAG_HIDDEN);
-    }
-
-    int16_t img_x = (CAT_CONTAINER_W - scale_cat_px(CAT_IMAGE_W)) / 2 + frame_x;
-    int16_t img_y = (CAT_CONTAINER_H - scale_cat_px(CAT_IMAGE_H)) / 2 + frame_y;
-
-    switch (frame) {
-    case BONGO_CAT_LEFT_UP:
-    case BONGO_CAT_LEFT_DOWN:
-        set_tap_mask(right_tap_mask, img_x, img_y, RIGHT_TAP_MASK_X,
-                     RIGHT_TAP_MASK_Y, RIGHT_TAP_MASK_W, RIGHT_TAP_MASK_H);
-        break;
-    case BONGO_CAT_RIGHT_UP:
-    case BONGO_CAT_RIGHT_DOWN:
-        set_tap_mask(left_tap_mask, img_x, img_y, LEFT_TAP_MASK_X,
-                     LEFT_TAP_MASK_Y, LEFT_TAP_MASK_W, LEFT_TAP_MASK_H);
-        break;
-    case BONGO_CAT_RESTING:
-    case BONGO_CAT_BUSY:
-    case BONGO_CAT_BOTH:
-    default:
-        break;
-    }
-}
-
-static void apply_bongo_frame(void *unused) {
-    ARG_UNUSED(unused);
-
-    if (bongo_cat_img == NULL) {
-        return;
-    }
-
-    lv_img_set_src(bongo_cat_img, bongo_frame_image(pending_bongo_frame));
-
-    int16_t x;
-    int16_t y;
-    bongo_frame_offset(pending_bongo_frame, &x, &y);
-    lv_obj_align(bongo_cat_img, LV_ALIGN_CENTER, x, y);
-    apply_tap_masks(pending_bongo_frame, x, y);
-}
-
-static void bongo_frame_work_handler(struct k_work *work) {
-    ARG_UNUSED(work);
-    lv_async_call(apply_bongo_frame, NULL);
-}
-
-static void schedule_bongo_frame(enum bongo_cat_frame frame, k_timeout_t delay) {
-    if (!display_work_ready || !display_activity_active) {
-        return;
-    }
-
-    pending_bongo_frame = frame;
-    k_work_reschedule(&bongo_frame_work, delay);
-}
-
-static void bongo_return_work_handler(struct k_work *work) {
-    ARG_UNUSED(work);
-
-    if (!busy_tick_running) {
-        schedule_bongo_frame(BONGO_CAT_RESTING, K_NO_WAIT);
-    }
-}
-
-static void bongo_down_work_handler(struct k_work *work) {
-    ARG_UNUSED(work);
-
-    if (!busy_tick_running) {
-        schedule_bongo_frame(pending_down_frame, K_NO_WAIT);
-        k_work_reschedule(&bongo_return_work, K_MSEC(BONGO_ACTIVE_MS));
-    }
-}
-
-static void bongo_busy_work_handler(struct k_work *work) {
-    ARG_UNUSED(work);
-
-    if (!display_screen_ready || !display_activity_active ||
-        calc_kps_x10() < BONGO_BUSY_KPS_X10) {
-        busy_tick_running = false;
-        busy_phase = 0;
-        schedule_bongo_frame(BONGO_CAT_RESTING, K_NO_WAIT);
-        return;
-    }
-
-    enum bongo_cat_frame frame = BONGO_CAT_RESTING;
-    if (busy_phase == 1) {
-        frame = BONGO_CAT_BUSY;
-    } else if (busy_phase == 2) {
-        frame = BONGO_CAT_BOTH;
-    }
-
-    schedule_bongo_frame(frame, K_NO_WAIT);
-    busy_phase = (busy_phase + 1) % 3;
-    k_work_reschedule(&bongo_busy_work, K_MSEC(BONGO_BUSY_TICK_MS));
-}
-
-static void start_busy_animation(void) {
-    if (!display_work_ready || !display_activity_active) {
-        return;
-    }
-
-    k_work_cancel_delayable(&bongo_down_work);
-    k_work_cancel_delayable(&bongo_return_work);
-
-    if (busy_tick_running) {
-        return;
-    }
-
-    busy_tick_running = true;
-    busy_phase = 0;
-    k_work_reschedule(&bongo_busy_work, K_NO_WAIT);
-}
-
-static void stop_busy_animation(void) {
-    if (!display_work_ready) {
-        return;
-    }
-
-    busy_tick_running = false;
-    busy_phase = 0;
-    k_work_cancel_delayable(&bongo_busy_work);
-}
-
-static void trigger_typing_frame(bool left_hand) {
-    if (!display_work_ready || !display_activity_active) {
-        return;
-    }
-
-    /*
-     * The viewer sees the cat mirrored: the cat's left paw is on screen-right,
-     * and the cat's right paw is on screen-left. Match the user's hand side to
-     * the cat's own hand side, not the screen side.
-     */
-    pending_down_frame = left_hand ? BONGO_CAT_RIGHT_DOWN : BONGO_CAT_LEFT_DOWN;
-
-    k_work_cancel_delayable(&bongo_down_work);
-    k_work_cancel_delayable(&bongo_return_work);
-    schedule_bongo_frame(left_hand ? BONGO_CAT_RIGHT_UP : BONGO_CAT_LEFT_UP,
-                         K_NO_WAIT);
-    k_work_reschedule(&bongo_down_work, K_MSEC(BONGO_DOWN_MS));
-}
-
-/* ══════════════════════════════════════════════════════════════════ */
-/*                       Typing Speed Tracker                       */
-/* ══════════════════════════════════════════════════════════════════ */
-
-static void record_keystroke_time(void) {
-    k_spinlock_key_t key = k_spin_lock(&speed_lock);
-    keystroke_times[speed_ring_head] = k_uptime_get();
-    speed_ring_head = (speed_ring_head + 1) % SPEED_RING_SIZE;
-    if (speed_ring_count < SPEED_RING_SIZE) {
-        speed_ring_count++;
-    }
-    k_spin_unlock(&speed_lock, key);
-}
-
-/*
- * Returns keys-per-second x 10  (fixed-point to avoid float).
- * E.g. a return value of 45 means 4.5 KPS.
- */
-static int calc_kps_x10(void) {
-    int64_t now = k_uptime_get();
-    int64_t limit = now - SPEED_WINDOW_MS;
-
-    k_spinlock_key_t key = k_spin_lock(&speed_lock);
-    uint8_t count = speed_ring_count;
-    uint8_t head  = speed_ring_head;
-    int active_clicks = 0;
-
-    for (uint8_t i = 0; i < count; i++) {
-        uint8_t idx = (head - 1 - i + SPEED_RING_SIZE) % SPEED_RING_SIZE;
-        if (keystroke_times[idx] > limit) {
-            active_clicks++;
-        } else {
-            break;
-        }
-    }
-    k_spin_unlock(&speed_lock, key);
-
-    return (int)((int64_t)active_clicks * 10000 / SPEED_WINDOW_MS);
-}
-
-/* ══════════════════════════════════════════════════════════════════ */
-/*                       Modifier Status                           */
-/* ══════════════════════════════════════════════════════════════════ */
-
-static void apply_caps_lock_status(void *unused) {
-    ARG_UNUSED(unused);
-
-    if (caps_lock_badge == NULL) {
-        return;
-    }
-
-    if (caps_lock_active) {
-        lv_obj_clear_flag(caps_lock_badge, LV_OBJ_FLAG_HIDDEN);
-    } else {
-        lv_obj_add_flag(caps_lock_badge, LV_OBJ_FLAG_HIDDEN);
-    }
-}
-
-static bool caps_lock_indicator_is_active(zmk_hid_indicators_t indicators) {
-    return (indicators & HID_INDICATOR_CAPS_LOCK) != 0;
-}
-
-static zmk_hid_indicators_t get_all_hid_indicators(void) {
-    zmk_hid_indicators_t indicators = 0;
-
-#if IS_ENABLED(CONFIG_ZMK_USB)
-    struct zmk_endpoint_instance usb_endpoint = {
-        .transport = ZMK_TRANSPORT_USB,
-    };
-    indicators |= zmk_hid_indicators_get_profile(usb_endpoint);
-#endif
-
-#if IS_ENABLED(CONFIG_ZMK_BLE)
-    for (uint8_t i = 0; i < ZMK_BLE_PROFILE_COUNT; i++) {
-        struct zmk_endpoint_instance ble_endpoint = {
-            .transport = ZMK_TRANSPORT_BLE,
-        };
-        ble_endpoint.ble.profile_index = i;
-        indicators |= zmk_hid_indicators_get_profile(ble_endpoint);
-    }
-#endif
-
-    return indicators;
-}
-
-static void set_caps_lock_status(zmk_hid_indicators_t indicators) {
-    bool active = caps_lock_indicator_is_active(indicators | get_all_hid_indicators());
-
-    if (active == caps_lock_active) {
-        return;
-    }
-
-    caps_lock_active = active;
-    lv_async_call(apply_caps_lock_status, NULL);
-}
-
-static void apply_modifier_status(void *unused) {
-    ARG_UNUSED(unused);
-
-    if (modifier_status_row == NULL) {
-        return;
-    }
-
-    uint8_t mods = pending_modifier_mask;
-    bool any_active = false;
-
-    // Ctrl
-    if (mods & (MOD_LCTL | MOD_RCTL)) {
-        lv_obj_clear_flag(mod_boxes[0], LV_OBJ_FLAG_HIDDEN);
-        any_active = true;
-    } else {
-        lv_obj_add_flag(mod_boxes[0], LV_OBJ_FLAG_HIDDEN);
-    }
-
-    // Shift
-    if (mods & (MOD_LSFT | MOD_RSFT)) {
-        lv_obj_clear_flag(mod_boxes[1], LV_OBJ_FLAG_HIDDEN);
-        any_active = true;
-    } else {
-        lv_obj_add_flag(mod_boxes[1], LV_OBJ_FLAG_HIDDEN);
-    }
-
-    // Alt
-    if (mods & (MOD_LALT | MOD_RALT)) {
-        lv_obj_clear_flag(mod_boxes[2], LV_OBJ_FLAG_HIDDEN);
-        any_active = true;
-    } else {
-        lv_obj_add_flag(mod_boxes[2], LV_OBJ_FLAG_HIDDEN);
-    }
-
-    // Win
-    if (mods & (MOD_LGUI | MOD_RGUI)) {
-        lv_obj_clear_flag(mod_boxes[3], LV_OBJ_FLAG_HIDDEN);
-        any_active = true;
-    } else {
-        lv_obj_add_flag(mod_boxes[3], LV_OBJ_FLAG_HIDDEN);
-    }
-
-    if (any_active) {
-        lv_obj_clear_flag(modifier_status_row, LV_OBJ_FLAG_HIDDEN);
-    } else {
-        lv_obj_add_flag(modifier_status_row, LV_OBJ_FLAG_HIDDEN);
-    }
-}
-
-static void set_modifier_status_mask(uint8_t mask) {
-    if (mask == pending_modifier_mask) {
-        return;
-    }
-
-    pending_modifier_mask = mask;
-    lv_async_call(apply_modifier_status, NULL);
-}
-
-static uint8_t modifier_mask_from_position(uint32_t position) {
-    /* Physical modifier positions from the base keymap. */
-    switch (position) {
-    case 12:
-    case 27:
-        return MOD_LCTL;
-    case 58:
-        return MOD_RCTL;
-    case 18:
-    case 28:
-        return MOD_LSFT;
-    case 61:
-        return MOD_RALT;
-    case 29:
-        return MOD_LGUI;
-    case 60:
-        return MOD_RGUI;
-    default:
-        return 0;
-    }
-}
-
-static void update_modifier_status_from_position(uint32_t position, bool pressed) {
-    uint8_t mods = modifier_mask_from_position(position);
-
-    if (mods == 0) {
-        return;
-    }
-
-    for (uint8_t i = 0; i < 8; i++) {
-        if ((mods & (1U << i)) == 0) {
-            continue;
-        }
-
-        if (pressed) {
-            if (active_modifier_counts[i] < UINT8_MAX) {
-                active_modifier_counts[i]++;
+            for (int i = min_bar; i < max_bar; i++) {
+                lv_color_t color = (i < active_bars)
+                                       ? lv_color_hex(DISPLAY_COLOR_WPM_BAR_ACTIVE)
+                                       : lv_color_hex(DISPLAY_COLOR_WPM_BAR_INACTIVE);
+                lv_obj_set_style_bg_color(widget->bars[i], color, LV_PART_MAIN);
             }
-        } else if (active_modifier_counts[i] > 0) {
-            active_modifier_counts[i]--;
+            previous_active_bars = active_bars;
         }
-    }
 
-    uint8_t mask = 0;
-    for (uint8_t i = 0; i < 8; i++) {
-        if (active_modifier_counts[i] > 0) {
-            mask |= 1U << i;
+        if (peak_position > active_bars && peak_position > 0) {
+            int bar_width = 8;
+            int bar_gap = 2;
+            int total_width = WPM_BAR_COUNT * bar_width + (WPM_BAR_COUNT - 1) * bar_gap;
+            int start_x = (260 - total_width) / 2;
+            int peak_slot = (peak_position > active_bars + 1) ? (peak_position - 1)
+                                                               : active_bars;
+            if (peak_slot >= WPM_BAR_COUNT) {
+                peak_slot = WPM_BAR_COUNT - 1;
+            }
+            int peak_x = start_x + peak_slot * (bar_width + bar_gap) + 2;
+            lv_obj_set_pos(widget->peak_indicator, peak_x, 0);
+            lv_obj_clear_flag(widget->peak_indicator, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(widget->peak_indicator, LV_OBJ_FLAG_HIDDEN);
         }
-    }
 
-    position_modifier_mask = mask;
-    set_modifier_status_mask(position_modifier_mask |
-                             zmk_hid_get_keyboard_report()->body.modifiers);
+        char wpm_text[4];
+        snprintf(wpm_text, sizeof(wpm_text), "%d", (int)(displayed_wpm + 0.5f));
+        lv_label_set_text(widget->wpm_label, wpm_text);
+    }
 }
 
-static void modifier_status_work_handler(struct k_work *work) {
+static void wpm_smooth_work_handler(struct k_work *work) {
     ARG_UNUSED(work);
 
-    if (!display_screen_ready || !display_activity_active) {
-        return;
-    }
+    float diff = target_wpm - displayed_wpm;
+    bool at_target = (diff > -0.5f && diff < 0.5f);
+    int old_int = (int)(displayed_wpm + 0.5f);
 
-    uint8_t mods = position_modifier_mask |
-                   zmk_hid_get_keyboard_report()->body.modifiers;
-    set_modifier_status_mask(mods);
-
-    if (wps_label != NULL) {
-        int kps_x10 = calc_kps_x10();
-        // WPS (Words Per Second) * 10 = kps_x10 / 5
-        int wps_val = kps_x10 / 5;
-        lv_label_set_text_fmt(wps_label, "WPS:%03d", wps_val);
-    }
-
-    k_work_reschedule(&modifier_status_work, K_MSEC(MOD_STATUS_TICK_MS));
-}
-
-static void set_display_activity_active(bool active) {
-    if (display_activity_active == active) {
-        return;
-    }
-
-    display_activity_active = active;
-
-    if (!display_work_ready) {
-        return;
-    }
-
-    if (active) {
-        if (display_screen_ready) {
-            schedule_bongo_frame(BONGO_CAT_RESTING, K_NO_WAIT);
-            k_work_reschedule(&modifier_status_work, K_NO_WAIT);
-        }
-        return;
-    }
-
-    busy_tick_running = false;
-    busy_phase = 0;
-    active_key_count = 0;
-    k_work_cancel_delayable(&bongo_frame_work);
-    k_work_cancel_delayable(&bongo_down_work);
-    k_work_cancel_delayable(&bongo_return_work);
-    k_work_cancel_delayable(&bongo_busy_work);
-    k_work_cancel_delayable(&modifier_status_work);
-}
-
-/* ══════════════════════════════════════════════════════════════════ */
-/*                       Layer Status                              */
-/* ══════════════════════════════════════════════════════════════════ */
-
-static void active_label_slide_anim_cb(void *var, int32_t val) {
-    lv_obj_t *badge = (lv_obj_t *)var;
-    int32_t y_pos = (badge == fn_layer_badge) ? LAYER_FN_Y : LAYER_BASE_Y;
-    lv_obj_align(badge, LV_ALIGN_TOP_RIGHT, -LAYER_STATUS_X + val, y_pos);
-}
-
-static void trigger_slide_in(lv_obj_t *badge) {
-    lv_anim_t a;
-    lv_anim_init(&a);
-    lv_anim_set_var(&a, badge);
-    lv_anim_set_values(&a, 60, 0);                 // Slide in from +60px right
-    lv_anim_set_time(&a, 250);                     // 250ms duration (springy overshoot)
-    lv_anim_set_exec_cb(&a, active_label_slide_anim_cb);
-    lv_anim_set_path_cb(&a, lv_anim_path_overshoot); // Use LVGL's built-in spring overshoot curve!
-    lv_anim_start(&a);
-}
-
-static void apply_layer_status(void *unused) {
-    ARG_UNUSED(unused);
-
-    if (base_layer_badge == NULL || base_layer_label == NULL ||
-        fn_layer_badge == NULL || fn_layer_label == NULL) {
-        return;
-    }
-
-    uint8_t layer = zmk_keymap_highest_layer_active();
-
-    if (layer == LAYER_FN_INDEX) {
-        // BASE layer inactive: transparent background, gray text
-        lv_obj_set_style_bg_opa(base_layer_badge, LV_OPA_TRANSP, LV_PART_MAIN);
-        lv_obj_set_style_text_color(base_layer_label, lv_color_hex(0x606060), LV_PART_MAIN);
-        lv_label_set_text(base_layer_label, "  BASE");
-
-        // FN layer active: red background, white text
-        lv_obj_set_style_bg_color(fn_layer_badge, lv_color_hex(0xC63939), LV_PART_MAIN);
-        lv_obj_set_style_bg_opa(fn_layer_badge, LV_OPA_COVER, LV_PART_MAIN);
-        lv_obj_set_style_text_color(fn_layer_label, lv_color_white(), LV_PART_MAIN);
-        lv_label_set_text(fn_layer_label, "> FN ");
-
-        trigger_slide_in(fn_layer_badge);
+    if (at_target) {
+        displayed_wpm = target_wpm;
     } else {
-        // BASE layer active: blue background, white text
-        lv_obj_set_style_bg_color(base_layer_badge, lv_color_hex(0x2B5C8F), LV_PART_MAIN);
-        lv_obj_set_style_bg_opa(base_layer_badge, LV_OPA_COVER, LV_PART_MAIN);
-        lv_obj_set_style_text_color(base_layer_label, lv_color_white(), LV_PART_MAIN);
-        lv_label_set_text(base_layer_label, "> BASE ");
-
-        // FN layer inactive: transparent background, gray text
-        lv_obj_set_style_bg_opa(fn_layer_badge, LV_OPA_TRANSP, LV_PART_MAIN);
-        lv_obj_set_style_text_color(fn_layer_label, lv_color_hex(0x606060), LV_PART_MAIN);
-        lv_label_set_text(fn_layer_label, "  FN");
-
-        trigger_slide_in(base_layer_badge);
-    }
-}
-
-/* ══════════════════════════════════════════════════════════════════ */
-/*                       Battery Status                            */
-/* ══════════════════════════════════════════════════════════════════ */
-
-static void clear_obj_style(lv_obj_t *obj) {
-    lv_obj_set_style_bg_opa(obj, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_style_border_width(obj, 0, LV_PART_MAIN);
-    lv_obj_set_style_radius(obj, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(obj, 0, LV_PART_MAIN);
-    lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
-}
-
-static void apply_battery_status(void *unused) {
-    ARG_UNUSED(unused);
-
-    if (battery_status_row == NULL) {
-        return;
+        float factor = (diff > 0) ? smoothing_factor_up : smoothing_factor_down;
+        displayed_wpm += diff * factor;
     }
 
-    uint8_t levels[BATTERY_SLOT_COUNT];
-    bool known[BATTERY_SLOT_COUNT];
-    bool connected[BATTERY_SLOT_COUNT];
-
-    k_spinlock_key_t key = k_spin_lock(&battery_lock);
-    for (size_t i = 0; i < BATTERY_SLOT_COUNT; i++) {
-        levels[i] = battery_levels[i];
-        known[i] = battery_level_known[i];
-        connected[i] = battery_connected[i];
+    int new_int = (int)(displayed_wpm + 0.5f);
+    int active_bars = (new_int * WPM_BAR_COUNT) / WPM_MAX;
+    if (active_bars > WPM_BAR_COUNT) {
+        active_bars = WPM_BAR_COUNT;
     }
-    k_spin_unlock(&battery_lock, key);
 
-    for (size_t i = 0; i < BATTERY_SLOT_COUNT; i++) {
-        struct battery_slot_obj *slot = &battery_slots[i];
-
-        if (connected[i]) {
-            // Restore connected colors (white battery borders and white text)
-            lv_obj_set_style_border_color(slot->icon_body, lv_color_white(), LV_PART_MAIN);
-            lv_obj_set_style_bg_color(slot->icon_cap, lv_color_white(), LV_PART_MAIN);
-            lv_obj_set_style_text_color(slot->num, lv_color_white(), LV_PART_MAIN);
-
-            if (known[i]) {
-                lv_bar_set_value(slot->bar, levels[i], LV_ANIM_ON);
-                lv_label_set_text_fmt(slot->num, "%d", levels[i]);
-
-                // Level-based status colors
-                if (levels[i] > 50) {
-                    lv_obj_set_style_bg_color(slot->bar, lv_color_hex(0x4CAF50), LV_PART_INDICATOR);
-                } else if (levels[i] >= 20) {
-                    lv_obj_set_style_bg_color(slot->bar, lv_color_hex(0xF57C00), LV_PART_INDICATOR);
-                } else {
-                    lv_obj_set_style_bg_color(slot->bar, lv_color_hex(0xD32F2F), LV_PART_INDICATOR);
-                }
-            } else {
-                lv_bar_set_value(slot->bar, 0, LV_ANIM_ON);
-                lv_label_set_text(slot->num, "--");
-            }
+    bool peak_changed = false;
+    if (active_bars > peak_position) {
+        peak_position = active_bars;
+        peak_hold_counter = 0;
+        peak_decay_counter = 0;
+        peak_changed = true;
+    } else if (peak_position > active_bars) {
+        if (peak_hold_counter < 90) {
+            peak_hold_counter++;
         } else {
-            // Disconnected: Grey outline, grey text, empty bar
-            lv_obj_set_style_border_color(slot->icon_body, lv_color_hex(0x606060), LV_PART_MAIN);
-            lv_obj_set_style_bg_color(slot->icon_cap, lv_color_hex(0x606060), LV_PART_MAIN);
-            lv_obj_set_style_text_color(slot->num, lv_color_hex(0x606060), LV_PART_MAIN);
+            peak_decay_counter++;
+            if (peak_decay_counter >= 18) {
+                peak_position--;
+                peak_decay_counter = 0;
+                peak_changed = true;
+            }
+        }
+    }
 
-            lv_bar_set_value(slot->bar, 0, LV_ANIM_OFF);
-            lv_label_set_text(slot->num, "--");
+    if (old_int != new_int || peak_changed) {
+        wpm_meter_render(active_bars);
+    }
+
+    if (!at_target || peak_position > active_bars) {
+        k_work_schedule(&wpm_smooth_work, K_MSEC(33));
+    }
+}
+
+static void wpm_meter_update_cb(struct wpm_meter_state state) {
+    target_wpm = (float)state.wpm;
+    k_work_schedule(&wpm_smooth_work, K_NO_WAIT);
+}
+
+static struct wpm_meter_state wpm_meter_get_state(const zmk_event_t *eh) {
+    ARG_UNUSED(eh);
+    return (struct wpm_meter_state){.wpm = (uint8_t)zmk_wpm_get_state()};
+}
+
+ZMK_DISPLAY_WIDGET_LISTENER(dongle_wpm, struct wpm_meter_state,
+                            wpm_meter_update_cb, wpm_meter_get_state)
+ZMK_SUBSCRIPTION(dongle_wpm, zmk_wpm_state_changed)
+
+/* ───────────────────────────── Layer state ─────────────────────────── */
+
+struct layer_state {
+    uint8_t index;
+};
+
+static void layer_update_cb(struct layer_state state) {
+    struct zmk_widget_wpm_meter *wpm_widget;
+    SYS_SLIST_FOR_EACH_CONTAINER(&wpm_widgets, wpm_widget, node) {
+        const char *layer_name =
+            zmk_keymap_layer_name(zmk_keymap_layer_index_to_id(state.index));
+        char display_name[32];
+
+        if (layer_name != NULL && *layer_name != '\0') {
+            snprintf(display_name, sizeof(display_name), "%s", layer_name);
+        } else {
+            snprintf(display_name, sizeof(display_name), "Layer %d", state.index);
+        }
+
+        for (int i = 0; display_name[i] != '\0'; i++) {
+            display_name[i] = (char)toupper((unsigned char)display_name[i]);
+        }
+
+        lv_label_set_text(wpm_widget->layer_label, display_name);
+    }
+
+    struct layer_dots_widget *dots_widget;
+    SYS_SLIST_FOR_EACH_CONTAINER(&layer_dots_widgets, dots_widget, node) {
+        for (int i = 0; i < LAYER_DOT_COUNT; i++) {
+            lv_color_t color = (i == state.index)
+                                   ? lv_color_hex(DISPLAY_COLOR_LAYER_DOT_ACTIVE)
+                                   : lv_color_hex(DISPLAY_COLOR_LAYER_DOT_INACTIVE);
+            lv_obj_set_style_bg_color(dots_widget->dots[i], color, LV_PART_MAIN);
         }
     }
 }
 
-static void set_battery_level(uint8_t source, uint8_t level) {
-    if (source >= BATTERY_SLOT_COUNT) {
-        return;
-    }
-
-    k_spinlock_key_t key = k_spin_lock(&battery_lock);
-    battery_levels[source] = level;
-    battery_level_known[source] = level > 0;
-    battery_connected[source] = level > 0;
-    k_spin_unlock(&battery_lock, key);
-
-    if (display_screen_ready) {
-        lv_async_call(apply_battery_status, NULL);
-    }
-}
-
-static void create_battery_status(lv_obj_t *screen) {
-    battery_status_row = lv_obj_create(screen);
-    lv_obj_set_size(battery_status_row, lv_pct(100), BATTERY_STATUS_H);
-    lv_obj_align(battery_status_row, LV_ALIGN_BOTTOM_MID, 0, 0);
-    clear_obj_style(battery_status_row);
-
-    for (size_t i = 0; i < BATTERY_SLOT_COUNT; i++) {
-        lv_obj_t *slot = lv_obj_create(battery_status_row);
-        clear_obj_style(slot);
-        lv_obj_set_size(slot, LV_SIZE_CONTENT, 12);
-        lv_obj_set_pos(slot, BATTERY_ROW_PAD_X + i * BATTERY_SLOT_STEP,
-                       BATTERY_SLOT_Y);
-
-        // Align child widgets horizontally inside the slot
-        lv_obj_set_layout(slot, LV_LAYOUT_FLEX);
-        lv_obj_set_flex_flow(slot, LV_FLEX_FLOW_ROW);
-        lv_obj_set_flex_align(slot, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        lv_obj_set_style_pad_column(slot, 6, LV_PART_MAIN);
-
-        // Custom pixel-art battery icon container (width 26, height 12)
-        lv_obj_t *icon_box = lv_obj_create(slot);
-        clear_obj_style(icon_box);
-        lv_obj_set_size(icon_box, 26, 12);
-        lv_obj_clear_flag(icon_box, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
-
-        // Battery outer outline box (width 24, height 12, radius 0, transparent bg, 1px border)
-        battery_slots[i].icon_body = lv_obj_create(icon_box);
-        lv_obj_set_size(battery_slots[i].icon_body, 24, 12);
-        lv_obj_align(battery_slots[i].icon_body, LV_ALIGN_LEFT_MID, 0, 0);
-        lv_obj_set_style_bg_opa(battery_slots[i].icon_body, LV_OPA_TRANSP, LV_PART_MAIN);
-        lv_obj_set_style_border_width(battery_slots[i].icon_body, 1, LV_PART_MAIN);
-        lv_obj_set_style_border_color(battery_slots[i].icon_body, lv_color_white(), LV_PART_MAIN);
-        lv_obj_set_style_radius(battery_slots[i].icon_body, 0, LV_PART_MAIN);
-        lv_obj_set_style_pad_all(battery_slots[i].icon_body, 0, LV_PART_MAIN);
-        lv_obj_clear_flag(battery_slots[i].icon_body, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
-
-        // Battery terminal cap (width 2, height 6, aligned to the right center)
-        battery_slots[i].icon_cap = lv_obj_create(icon_box);
-        lv_obj_set_size(battery_slots[i].icon_cap, 2, 6);
-        lv_obj_align(battery_slots[i].icon_cap, LV_ALIGN_RIGHT_MID, 0, 0);
-        lv_obj_set_style_bg_color(battery_slots[i].icon_cap, lv_color_white(), LV_PART_MAIN);
-        lv_obj_set_style_bg_opa(battery_slots[i].icon_cap, LV_OPA_COVER, LV_PART_MAIN);
-        lv_obj_set_style_border_width(battery_slots[i].icon_cap, 0, LV_PART_MAIN);
-        lv_obj_set_style_radius(battery_slots[i].icon_cap, 0, LV_PART_MAIN);
-        lv_obj_set_style_pad_all(battery_slots[i].icon_cap, 0, LV_PART_MAIN);
-        lv_obj_clear_flag(battery_slots[i].icon_cap, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
-
-        // Battery fill indicator (width 22, height 10 inside the 24x12 outer box)
-        battery_slots[i].bar = lv_bar_create(battery_slots[i].icon_body);
-        lv_obj_set_size(battery_slots[i].bar, 22, 10);
-        lv_obj_align(battery_slots[i].bar, LV_ALIGN_LEFT_MID, 0, 0);
-        lv_obj_set_style_bg_opa(battery_slots[i].bar, LV_OPA_TRANSP, LV_PART_MAIN);
-        lv_obj_set_style_radius(battery_slots[i].bar, 0, LV_PART_MAIN);
-        lv_obj_set_style_radius(battery_slots[i].bar, 0, LV_PART_INDICATOR);
-        lv_obj_set_style_bg_opa(battery_slots[i].bar, LV_OPA_COVER, LV_PART_INDICATOR);
-        lv_obj_set_style_anim_time(battery_slots[i].bar, 250, 0);
-        lv_bar_set_range(battery_slots[i].bar, 0, 100);
-        lv_bar_set_value(battery_slots[i].bar, 0, LV_ANIM_OFF);
-
-        // Percentage text label (silkscreen_regular_16)
-        battery_slots[i].num = lv_label_create(slot);
-        lv_obj_set_style_text_font(battery_slots[i].num, &silkscreen_regular_16,
-                                   LV_PART_MAIN);
-        lv_obj_set_style_text_color(battery_slots[i].num, lv_color_white(),
-                                    LV_PART_MAIN);
-        lv_obj_set_style_translate_y(battery_slots[i].num, -2, LV_PART_MAIN);
-        lv_label_set_text(battery_slots[i].num, "--");
-    }
-
-    // Right WPS speed label (16px font size, visual height 10px, aligned at bottom y = 123)
-    wps_label = lv_label_create(battery_status_row);
-    lv_obj_set_style_text_font(wps_label, &silkscreen_regular_16, LV_PART_MAIN);
-    lv_obj_set_style_text_color(wps_label, lv_color_white(), LV_PART_MAIN);
-    lv_obj_align(wps_label, LV_ALIGN_TOP_RIGHT, -BATTERY_ROW_PAD_X,
-                 BATTERY_WPS_Y);
-    lv_label_set_text(wps_label, "WPS:000");
-
-    apply_battery_status(NULL);
-}
-
-/* ══════════════════════════════════════════════════════════════════ */
-/*                       Display Screen Setup                       */
-/* ══════════════════════════════════════════════════════════════════ */
-
-static void create_caps_lock_status(lv_obj_t *screen) {
-    caps_lock_badge = lv_obj_create(screen);
-    clear_obj_style(caps_lock_badge);
-    lv_obj_set_size(caps_lock_badge, CAPS_LOCK_BADGE_W, CAPS_LOCK_BADGE_H);
-    lv_obj_align(caps_lock_badge, LV_ALIGN_TOP_LEFT, CAPS_LOCK_BADGE_X, CAPS_LOCK_BADGE_Y);
-    lv_obj_set_style_bg_color(caps_lock_badge, lv_color_black(), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(caps_lock_badge, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_border_width(caps_lock_badge, 1, LV_PART_MAIN);
-    lv_obj_set_style_border_color(caps_lock_badge, lv_color_white(), LV_PART_MAIN);
-    lv_obj_set_style_radius(caps_lock_badge, 0, LV_PART_MAIN);
-    lv_obj_clear_flag(caps_lock_badge, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
-
-    lv_obj_t *accent = lv_obj_create(caps_lock_badge);
-    clear_obj_style(accent);
-    lv_obj_set_size(accent, 5, CAPS_LOCK_BADGE_H - 2);
-    lv_obj_align(accent, LV_ALIGN_LEFT_MID, 1, 0);
-    lv_obj_set_style_bg_color(accent, lv_color_hex(0xC63939), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(accent, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_clear_flag(accent, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
-
-    lv_obj_t *label = lv_label_create(caps_lock_badge);
-    lv_obj_set_style_text_font(label, &silkscreen_bold_16, LV_PART_MAIN);
-    lv_obj_set_style_text_color(label, lv_color_white(), LV_PART_MAIN);
-    lv_obj_set_style_translate_y(label, -1, LV_PART_MAIN);
-    lv_label_set_text(label, "CAPS");
-    lv_obj_align(label, LV_ALIGN_CENTER, 3, 0);
-
-    caps_lock_active = caps_lock_indicator_is_active(get_all_hid_indicators());
-    apply_caps_lock_status(NULL);
-    lv_obj_move_foreground(caps_lock_badge);
-}
-
-static void create_modifier_status(lv_obj_t *screen) {
-    modifier_status_row = lv_obj_create(screen);
-    lv_obj_set_size(modifier_status_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_align(modifier_status_row, LV_ALIGN_BOTTOM_MID, 0, MOD_STATUS_BOTTOM_Y);
-    lv_obj_set_style_bg_opa(modifier_status_row, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_style_border_width(modifier_status_row, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(modifier_status_row, 0, LV_PART_MAIN);
-    lv_obj_clear_flag(modifier_status_row, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
-
-    lv_obj_set_layout(modifier_status_row, LV_LAYOUT_FLEX);
-    lv_obj_set_flex_flow(modifier_status_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(modifier_status_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(modifier_status_row, 4, LV_PART_MAIN);
-
-    const lv_img_dsc_t *symbols[] = {
-        &ctrl_symbol_img,
-        &shift_symbol_img,
-        &alt_symbol_img,
-        &win_symbol_img
+static struct layer_state layer_get_state(const zmk_event_t *eh) {
+    ARG_UNUSED(eh);
+    return (struct layer_state){
+        .index = (uint8_t)zmk_keymap_highest_layer_active(),
     };
-
-    for (size_t i = 0; i < 4; i++) {
-        // Parent box: solid white background
-        mod_boxes[i] = lv_obj_create(modifier_status_row);
-        lv_obj_set_size(mod_boxes[i], 23, 23);
-        lv_obj_set_style_bg_color(mod_boxes[i], lv_color_white(), LV_PART_MAIN);
-        lv_obj_set_style_bg_opa(mod_boxes[i], LV_OPA_COVER, LV_PART_MAIN);
-        lv_obj_set_style_radius(mod_boxes[i], 0, LV_PART_MAIN);
-        lv_obj_set_style_border_width(mod_boxes[i], 0, LV_PART_MAIN);
-        lv_obj_set_style_pad_all(mod_boxes[i], 0, LV_PART_MAIN);
-        lv_obj_clear_flag(mod_boxes[i], LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
-
-        // Inner box: black background with 1px white border, shifted top-left
-        lv_obj_t *inner_box = lv_obj_create(mod_boxes[i]);
-        lv_obj_set_size(inner_box, 21, 21);
-        lv_obj_align(inner_box, LV_ALIGN_TOP_LEFT, 0, 0);
-        lv_obj_set_style_bg_color(inner_box, lv_color_black(), LV_PART_MAIN);
-        lv_obj_set_style_bg_opa(inner_box, LV_OPA_COVER, LV_PART_MAIN);
-        lv_obj_set_style_radius(inner_box, 0, LV_PART_MAIN);
-        lv_obj_set_style_border_width(inner_box, 1, LV_PART_MAIN);
-        lv_obj_set_style_border_color(inner_box, lv_color_white(), LV_PART_MAIN);
-        lv_obj_set_style_pad_all(inner_box, 0, LV_PART_MAIN);
-        lv_obj_clear_flag(inner_box, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
-
-        // Icon image inside inner box
-        lv_obj_t *img = lv_img_create(inner_box);
-        lv_img_set_src(img, symbols[i]);
-        lv_obj_align(img, LV_ALIGN_CENTER, 0, 0);
-        lv_obj_set_style_img_recolor(img, lv_color_white(), LV_PART_MAIN);
-        lv_obj_set_style_img_recolor_opa(img, LV_OPA_COVER, LV_PART_MAIN);
-
-        // Initially hidden
-        lv_obj_add_flag(mod_boxes[i], LV_OBJ_FLAG_HIDDEN);
-    }
-
-    lv_obj_add_flag(modifier_status_row, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_move_foreground(modifier_status_row);
 }
 
-static void create_layer_status(lv_obj_t *screen) {
-    // Create BASE layer badge container
-    base_layer_badge = lv_obj_create(screen);
-    clear_obj_style(base_layer_badge);
-    lv_obj_set_size(base_layer_badge, LV_SIZE_CONTENT, 20);
-    lv_obj_set_style_radius(base_layer_badge, 3, LV_PART_MAIN);
-    lv_obj_set_layout(base_layer_badge, LV_LAYOUT_FLEX);
-    lv_obj_set_flex_flow(base_layer_badge, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(base_layer_badge, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_left(base_layer_badge, 6, LV_PART_MAIN);
-    lv_obj_set_style_pad_right(base_layer_badge, 6, LV_PART_MAIN);
-    lv_obj_align(base_layer_badge, LV_ALIGN_TOP_RIGHT, -LAYER_STATUS_X,
-                 LAYER_BASE_Y);
+ZMK_DISPLAY_WIDGET_LISTENER(dongle_layer, struct layer_state,
+                            layer_update_cb, layer_get_state)
+ZMK_SUBSCRIPTION(dongle_layer, zmk_layer_state_changed)
 
-    base_layer_label = lv_label_create(base_layer_badge);
-    lv_obj_set_style_text_font(base_layer_label, &silkscreen_bold_16, LV_PART_MAIN);
-    lv_obj_set_style_translate_y(base_layer_label, -1, LV_PART_MAIN); // 垂直微调 1 像素以完美对齐
+int zmk_widget_wpm_meter_init(struct zmk_widget_wpm_meter *widget, lv_obj_t *parent) {
+    widget->obj = lv_obj_create(parent);
+    lv_obj_clear_flag(widget->obj, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_size(widget->obj, 260, 90);
+    lv_obj_set_style_bg_opa(widget->obj, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(widget->obj, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(widget->obj, 0, LV_PART_MAIN);
 
-    // Create FN layer badge container
-    fn_layer_badge = lv_obj_create(screen);
-    clear_obj_style(fn_layer_badge);
-    lv_obj_set_size(fn_layer_badge, LV_SIZE_CONTENT, 20);
-    lv_obj_set_style_radius(fn_layer_badge, 3, LV_PART_MAIN);
-    lv_obj_set_layout(fn_layer_badge, LV_LAYOUT_FLEX);
-    lv_obj_set_flex_flow(fn_layer_badge, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(fn_layer_badge, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_left(fn_layer_badge, 6, LV_PART_MAIN);
-    lv_obj_set_style_pad_right(fn_layer_badge, 6, LV_PART_MAIN);
-    lv_obj_align(fn_layer_badge, LV_ALIGN_TOP_RIGHT, -LAYER_STATUS_X,
-                 LAYER_FN_Y);
+    int bar_width = 8;
+    int bar_gap = 2;
+    int bar_height = 90;
+    int total_width = WPM_BAR_COUNT * bar_width + (WPM_BAR_COUNT - 1) * bar_gap;
+    int start_x = (260 - total_width) / 2;
 
-    fn_layer_label = lv_label_create(fn_layer_badge);
-    lv_obj_set_style_text_font(fn_layer_label, &silkscreen_bold_16, LV_PART_MAIN);
-    lv_obj_set_style_translate_y(fn_layer_label, -1, LV_PART_MAIN); // 垂直微调 1 像素以完美对齐
-
-    apply_layer_status(NULL);
-    lv_obj_move_foreground(base_layer_badge);
-    lv_obj_move_foreground(fn_layer_badge);
-}
-
-static void create_bongo_cat(lv_obj_t *screen) {
-    cat_container = lv_obj_create(screen);
-    lv_obj_set_size(cat_container, CAT_CONTAINER_W, CAT_CONTAINER_H);
-    lv_obj_align(cat_container, LV_ALIGN_CENTER, CAT_CONTAINER_X, CAT_CONTAINER_Y);
-    lv_obj_set_style_bg_opa(cat_container, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_style_border_width(cat_container, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(cat_container, 0, LV_PART_MAIN);
-    lv_obj_clear_flag(cat_container, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
-
-    bongo_cat_img = lv_img_create(cat_container);
-    lv_img_set_src(bongo_cat_img, &bongo_resting);
-    lv_img_set_zoom(bongo_cat_img, CAT_IMAGE_ZOOM);
-    lv_img_set_antialias(bongo_cat_img, false);
-    lv_obj_align(bongo_cat_img, LV_ALIGN_CENTER, CAT_X_OFFSET, CAT_Y_OFFSET);
-
-    left_tap_mask = lv_obj_create(cat_container);
-    right_tap_mask = lv_obj_create(cat_container);
-    lv_obj_t *masks[] = {left_tap_mask, right_tap_mask};
-    for (size_t i = 0; i < 2; i++) {
-        lv_obj_clear_flag(masks[i], LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_set_style_bg_color(masks[i], lv_color_black(), LV_PART_MAIN);
-        lv_obj_set_style_bg_opa(masks[i], LV_OPA_COVER, LV_PART_MAIN);
-        lv_obj_set_style_border_width(masks[i], 0, LV_PART_MAIN);
-        lv_obj_set_style_pad_all(masks[i], 0, LV_PART_MAIN);
-        lv_obj_add_flag(masks[i], LV_OBJ_FLAG_HIDDEN);
+    for (int i = 0; i < WPM_BAR_COUNT; i++) {
+        widget->bars[i] = lv_obj_create(widget->obj);
+        lv_obj_clear_flag(widget->bars[i], LV_OBJ_FLAG_SCROLLABLE |
+                                             LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_size(widget->bars[i], bar_width, bar_height);
+        lv_obj_set_pos(widget->bars[i], start_x + i * (bar_width + bar_gap), 0);
+        lv_obj_set_style_bg_color(widget->bars[i],
+                                  lv_color_hex(DISPLAY_COLOR_WPM_BAR_INACTIVE),
+                                  LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(widget->bars[i], LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_border_width(widget->bars[i], 0, LV_PART_MAIN);
+        lv_obj_set_style_radius(widget->bars[i], 1, LV_PART_MAIN);
+        lv_obj_set_style_pad_all(widget->bars[i], 0, LV_PART_MAIN);
     }
 
-    lv_obj_move_foreground(cat_container);
-}
+    widget->peak_indicator = lv_obj_create(widget->obj);
+    lv_obj_clear_flag(widget->peak_indicator, LV_OBJ_FLAG_SCROLLABLE |
+                                                  LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_size(widget->peak_indicator, 4, bar_height);
+    lv_obj_set_style_bg_color(widget->peak_indicator, lv_color_hex(0x505050),
+                              LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(widget->peak_indicator, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(widget->peak_indicator, 0, LV_PART_MAIN);
+    lv_obj_set_style_radius(widget->peak_indicator, 1, LV_PART_MAIN);
+    lv_obj_add_flag(widget->peak_indicator, LV_OBJ_FLAG_HIDDEN);
 
-lv_obj_t *zmk_display_status_screen(void) {
-    lv_obj_t *screen = lv_obj_create(NULL);
-    lv_obj_set_style_bg_color(screen, lv_color_black(), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
+    widget->wpm_label = lv_label_create(widget->obj);
+    lv_label_set_text(widget->wpm_label, "0");
+    lv_obj_set_style_text_font(widget->wpm_label, &FR_Medium_32, LV_PART_MAIN);
+    lv_obj_set_style_text_color(widget->wpm_label,
+                                lv_color_hex(DISPLAY_COLOR_WPM_TEXT), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(widget->wpm_label, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(widget->wpm_label, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_pad_left(widget->wpm_label, 6, LV_PART_MAIN);
+    lv_obj_set_style_pad_right(widget->wpm_label, 6, LV_PART_MAIN);
+    lv_obj_set_style_pad_top(widget->wpm_label, 4, LV_PART_MAIN);
+    lv_obj_set_style_pad_bottom(widget->wpm_label, 4, LV_PART_MAIN);
+    lv_obj_align(widget->wpm_label, LV_ALIGN_TOP_LEFT, -7, -9);
 
-    create_battery_status(screen);
-    create_bongo_cat(screen);
-    create_caps_lock_status(screen);
-    create_layer_status(screen);
-    create_modifier_status(screen);
+    widget->layer_label = lv_label_create(widget->obj);
+    lv_label_set_text(widget->layer_label, "");
+    lv_obj_set_style_text_font(widget->layer_label, &DINishExpanded_Light_36,
+                               LV_PART_MAIN);
+    lv_obj_set_style_text_color(widget->layer_label,
+                                lv_color_hex(DISPLAY_COLOR_LAYER_TEXT), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(widget->layer_label, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(widget->layer_label, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_pad_left(widget->layer_label, 8, LV_PART_MAIN);
+    lv_obj_set_style_pad_right(widget->layer_label, 8, LV_PART_MAIN);
+    lv_obj_set_style_pad_top(widget->layer_label, 7, LV_PART_MAIN);
+    lv_obj_set_style_pad_bottom(widget->layer_label, 3, LV_PART_MAIN);
+    lv_obj_align(widget->layer_label, LV_ALIGN_BOTTOM_RIGHT, 9, 7);
 
-    display_screen_ready = true;
+    sys_slist_append(&wpm_widgets, &widget->node);
 
-    if (display_work_ready && display_activity_active) {
-        k_work_reschedule(&modifier_status_work, K_NO_WAIT);
+    if (!wpm_work_initialized) {
+        k_work_init_delayable(&wpm_smooth_work, wpm_smooth_work_handler);
+        wpm_work_initialized = true;
     }
-
-    return screen;
-}
-
-static int display_screen_init(void) {
-    k_work_init_delayable(&bongo_frame_work, bongo_frame_work_handler);
-    k_work_init_delayable(&bongo_down_work, bongo_down_work_handler);
-    k_work_init_delayable(&bongo_return_work, bongo_return_work_handler);
-    k_work_init_delayable(&bongo_busy_work, bongo_busy_work_handler);
-    k_work_init_delayable(&modifier_status_work, modifier_status_work_handler);
-    display_work_ready = true;
-
-    if (display_screen_ready && display_activity_active) {
-        k_work_reschedule(&modifier_status_work, K_NO_WAIT);
-    }
+    dongle_wpm_init();
 
     return 0;
 }
 
-SYS_INIT(display_screen_init, APPLICATION, CONFIG_APPLICATION_INIT_PRIORITY);
+int zmk_widget_layer_dots_init(struct layer_dots_widget *widget, lv_obj_t *parent) {
+    widget->obj = lv_obj_create(parent);
+    lv_obj_clear_flag(widget->obj, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_size(widget->obj, 260, 6);
+    lv_obj_set_style_bg_opa(widget->obj, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(widget->obj, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(widget->obj, 0, LV_PART_MAIN);
 
-/* ══════════════════════════════════════════════════════════════════ */
-/*                       ZMK Event Listener                         */
-/* ══════════════════════════════════════════════════════════════════ */
-
-static int bongo_cat_listener(const zmk_event_t *eh) {
-    const struct zmk_activity_state_changed *activity_ev =
-        as_zmk_activity_state_changed(eh);
-    if (activity_ev != NULL) {
-        set_display_activity_active(activity_ev->state == ZMK_ACTIVITY_ACTIVE);
-        return ZMK_EV_EVENT_BUBBLE;
+    int dot_gap = 3;
+    int dot_width = (260 - (LAYER_DOT_COUNT - 1) * dot_gap) / LAYER_DOT_COUNT;
+    for (int i = 0; i < LAYER_DOT_COUNT; i++) {
+        widget->dots[i] = lv_obj_create(widget->obj);
+        lv_obj_clear_flag(widget->dots[i], LV_OBJ_FLAG_SCROLLABLE |
+                                             LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_size(widget->dots[i], dot_width, 6);
+        lv_obj_set_pos(widget->dots[i], i * (dot_width + dot_gap), 0);
+        lv_obj_set_style_bg_color(widget->dots[i],
+                                  lv_color_hex(DISPLAY_COLOR_LAYER_DOT_INACTIVE),
+                                  LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(widget->dots[i], LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_border_width(widget->dots[i], 0, LV_PART_MAIN);
+        lv_obj_set_style_radius(widget->dots[i], 2, LV_PART_MAIN);
+        lv_obj_set_style_pad_all(widget->dots[i], 0, LV_PART_MAIN);
     }
 
-    const struct zmk_peripheral_battery_state_changed *battery_ev =
-        as_zmk_peripheral_battery_state_changed(eh);
-    if (battery_ev != NULL) {
-        set_battery_level(battery_ev->source, battery_ev->state_of_charge);
-        return ZMK_EV_EVENT_BUBBLE;
-    }
-
-    const struct zmk_hid_indicators_changed *indicators_ev =
-        as_zmk_hid_indicators_changed(eh);
-    if (indicators_ev != NULL) {
-        set_caps_lock_status(indicators_ev->indicators);
-        return ZMK_EV_EVENT_BUBBLE;
-    }
-
-    const struct zmk_layer_state_changed *layer_ev = as_zmk_layer_state_changed(eh);
-    if (layer_ev != NULL) {
-        lv_async_call(apply_layer_status, NULL);
-        return ZMK_EV_EVENT_BUBBLE;
-    }
-
-    const struct zmk_position_state_changed *ev = as_zmk_position_state_changed(eh);
-
-    if (ev == NULL) {
-        return ZMK_EV_EVENT_BUBBLE;
-    }
-
-    if (ev->state) {
-        if (active_key_count < UINT8_MAX) {
-            active_key_count++;
-        }
-
-        update_modifier_status_from_position(ev->position, true);
-
-        /* Record timestamp for typing speed calculation */
-        record_keystroke_time();
-
-        if (calc_kps_x10() >= BONGO_BUSY_KPS_X10) {
-            start_busy_animation();
-        } else {
-            stop_busy_animation();
-            trigger_typing_frame(ev->position < BONGO_RIGHT_FIRST_POSITION);
-        }
-    } else {
-        update_modifier_status_from_position(ev->position, false);
-
-        if (active_key_count > 0) {
-            active_key_count--;
-        }
-    }
-
-    return ZMK_EV_EVENT_BUBBLE;
+    sys_slist_append(&layer_dots_widgets, &widget->node);
+    dongle_layer_init();
+    return 0;
 }
 
-ZMK_LISTENER(dactyl_bongo_cat, bongo_cat_listener);
-ZMK_SUBSCRIPTION(dactyl_bongo_cat, zmk_activity_state_changed);
-ZMK_SUBSCRIPTION(dactyl_bongo_cat, zmk_hid_indicators_changed);
-ZMK_SUBSCRIPTION(dactyl_bongo_cat, zmk_layer_state_changed);
-ZMK_SUBSCRIPTION(dactyl_bongo_cat, zmk_position_state_changed);
-ZMK_SUBSCRIPTION(dactyl_bongo_cat, zmk_peripheral_battery_state_changed);
+/* ─────────────────────────── Modifier indicators ────────────────────── */
+
+struct modifier_indicator_state {
+    bool mods[4];
+};
+
+static void modifier_indicator_update_cb(struct modifier_indicator_state state) {
+    struct zmk_widget_modifier_indicator *widget;
+    SYS_SLIST_FOR_EACH_CONTAINER(&modifier_widgets, widget, node) {
+        for (int i = 0; i < 4; i++) {
+            lv_color_t color = state.mods[i]
+                                   ? lv_color_hex(DISPLAY_COLOR_MOD_ACTIVE)
+                                   : lv_color_hex(DISPLAY_COLOR_MOD_INACTIVE);
+            lv_obj_set_style_text_color(widget->mod_labels[i], color, LV_PART_MAIN);
+        }
+    }
+}
+
+static struct modifier_indicator_state modifier_indicator_get_state(
+    const zmk_event_t *eh) {
+    ARG_UNUSED(eh);
+
+    zmk_mod_flags_t mods = zmk_hid_get_explicit_mods();
+    return (struct modifier_indicator_state){
+        .mods = {
+            (mods & (MOD_LGUI | MOD_RGUI)) != 0,
+            (mods & (MOD_LALT | MOD_RALT)) != 0,
+            (mods & (MOD_LCTL | MOD_RCTL)) != 0,
+            (mods & (MOD_LSFT | MOD_RSFT)) != 0,
+        },
+    };
+}
+
+ZMK_DISPLAY_WIDGET_LISTENER(dongle_modifiers, struct modifier_indicator_state,
+                            modifier_indicator_update_cb,
+                            modifier_indicator_get_state)
+ZMK_SUBSCRIPTION(dongle_modifiers, zmk_keycode_state_changed)
+
+int zmk_widget_modifier_indicator_init(
+    struct zmk_widget_modifier_indicator *widget, lv_obj_t *parent) {
+    static const char *const modifier_texts[] = {"GUI", "ALT", "CTRL", "SHIFT"};
+
+    widget->obj = lv_obj_create(parent);
+    lv_obj_clear_flag(widget->obj, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_size(widget->obj, 230, 24);
+    lv_obj_set_style_bg_opa(widget->obj, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(widget->obj, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(widget->obj, 0, LV_PART_MAIN);
+    lv_obj_set_layout(widget->obj, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(widget->obj, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(widget->obj, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    for (int i = 0; i < 4; i++) {
+        widget->mod_labels[i] = lv_label_create(widget->obj);
+        lv_label_set_text(widget->mod_labels[i], modifier_texts[i]);
+        lv_obj_set_style_text_font(widget->mod_labels[i], &FG_Medium_20, LV_PART_MAIN);
+        lv_obj_set_style_text_color(widget->mod_labels[i],
+                                    lv_color_hex(DISPLAY_COLOR_MOD_INACTIVE),
+                                    LV_PART_MAIN);
+    }
+
+    sys_slist_append(&modifier_widgets, &widget->node);
+    dongle_modifiers_init();
+    return 0;
+}
+
+/* ───────────────────────────── Battery rings ────────────────────────── */
+
+static lv_obj_t *peripheral_arcs[PERIPHERAL_COUNT];
+static lv_obj_t *peripheral_label_boxes[PERIPHERAL_COUNT];
+static lv_obj_t *peripheral_labels[PERIPHERAL_COUNT];
+static uint8_t peripheral_battery[PERIPHERAL_COUNT];
+static bool peripheral_connected[PERIPHERAL_COUNT];
+
+struct battery_update_state {
+    uint8_t source;
+    uint8_t level;
+};
+
+struct connection_update_state {
+    uint8_t source;
+    bool connected;
+};
+
+static void update_peripheral_display(uint8_t source) {
+    if (source >= PERIPHERAL_COUNT || peripheral_arcs[source] == NULL) {
+        return;
+    }
+
+    lv_obj_t *arc = peripheral_arcs[source];
+    lv_obj_t *label_box = peripheral_label_boxes[source];
+    lv_obj_t *label = peripheral_labels[source];
+    bool connected = peripheral_connected[source];
+    uint8_t level = peripheral_battery[source];
+    bool low_battery = connected && level > 0 && level <= LOW_BATTERY_THRESHOLD;
+
+    uint32_t ring_color = DISPLAY_COLOR_BATTERY_DISCONNECTED_RING;
+    uint32_t fill_color = DISPLAY_COLOR_BATTERY_DISCONNECTED_FILL;
+    if (low_battery) {
+        ring_color = DISPLAY_COLOR_BATTERY_LOW_RING;
+        fill_color = DISPLAY_COLOR_BATTERY_LOW_FILL;
+    } else if (connected) {
+        ring_color = DISPLAY_COLOR_BATTERY_RING;
+        fill_color = DISPLAY_COLOR_BATTERY_FILL;
+    }
+
+    lv_obj_set_style_arc_color(arc, lv_color_hex(ring_color), LV_PART_MAIN);
+    lv_obj_set_style_arc_color(arc, lv_color_hex(fill_color), LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(arc, connected ? 6 : 2, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(arc, connected ? 6 : 2, LV_PART_INDICATOR);
+    lv_arc_set_value(arc, connected ? level : 0);
+
+    lv_obj_set_style_bg_color(label_box, lv_color_hex(fill_color), LV_PART_MAIN);
+    lv_obj_set_style_text_color(label, lv_color_black(), LV_PART_MAIN);
+    if (connected && level > 0) {
+        lv_label_set_text_fmt(label, "%d", level);
+    } else {
+        lv_label_set_text(label, "-");
+    }
+}
+
+static void battery_update_cb(struct battery_update_state state) {
+    if (state.source >= PERIPHERAL_COUNT) {
+        return;
+    }
+
+    peripheral_battery[state.source] = state.level;
+    update_peripheral_display(state.source);
+}
+
+static struct battery_update_state battery_get_state(const zmk_event_t *eh) {
+    if (eh == NULL) {
+        return (struct battery_update_state){.source = 0, .level = 0};
+    }
+
+    const struct zmk_peripheral_battery_state_changed *event =
+        as_zmk_peripheral_battery_state_changed(eh);
+    if (event == NULL) {
+        return (struct battery_update_state){.source = 0, .level = 0};
+    }
+
+    return (struct battery_update_state){
+        .source = event->source,
+        .level = event->state_of_charge,
+    };
+}
+
+ZMK_DISPLAY_WIDGET_LISTENER(dongle_battery, struct battery_update_state,
+                            battery_update_cb, battery_get_state)
+ZMK_SUBSCRIPTION(dongle_battery, zmk_peripheral_battery_state_changed)
+
+static void connection_update_cb(struct connection_update_state state) {
+    if (state.source >= PERIPHERAL_COUNT) {
+        return;
+    }
+
+    peripheral_connected[state.source] = state.connected;
+    update_peripheral_display(state.source);
+}
+
+static struct connection_update_state connection_get_state(const zmk_event_t *eh) {
+    if (eh == NULL) {
+        return (struct connection_update_state){.source = 0, .connected = false};
+    }
+
+    const struct zmk_split_central_status_changed *event =
+        as_zmk_split_central_status_changed(eh);
+    if (event == NULL) {
+        return (struct connection_update_state){.source = 0, .connected = false};
+    }
+
+    return (struct connection_update_state){
+        .source = event->slot,
+        .connected = event->connected,
+    };
+}
+
+ZMK_DISPLAY_WIDGET_LISTENER(dongle_connection, struct connection_update_state,
+                            connection_update_cb, connection_get_state)
+ZMK_SUBSCRIPTION(dongle_connection, zmk_split_central_status_changed)
+
+int zmk_widget_battery_circles_init(struct zmk_widget_battery_circles *widget,
+                                    lv_obj_t *parent) {
+    widget->obj = lv_obj_create(parent);
+    lv_obj_clear_flag(widget->obj, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_size(widget->obj, 132, 62);
+    lv_obj_set_style_bg_opa(widget->obj, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(widget->obj, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(widget->obj, 0, LV_PART_MAIN);
+
+    int arc_size = 58;
+    int y_center = (62 - arc_size) / 2;
+    int spacing = 66;
+    for (int i = 0; i < PERIPHERAL_COUNT; i++) {
+        lv_obj_t *arc = lv_arc_create(widget->obj);
+        peripheral_arcs[i] = arc;
+        lv_obj_clear_flag(arc, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_size(arc, arc_size, arc_size);
+        lv_obj_set_pos(arc, i * spacing, y_center);
+        lv_arc_set_range(arc, 0, 100);
+        lv_arc_set_value(arc, 0);
+        lv_arc_set_bg_angles(arc, 270, 180);
+        lv_arc_set_rotation(arc, 0);
+        lv_obj_set_style_arc_width(arc, 2, LV_PART_MAIN);
+        lv_obj_set_style_arc_width(arc, 2, LV_PART_INDICATOR);
+        lv_obj_set_style_arc_color(
+            arc, lv_color_hex(DISPLAY_COLOR_BATTERY_DISCONNECTED_RING), LV_PART_MAIN);
+        lv_obj_set_style_arc_color(
+            arc, lv_color_hex(DISPLAY_COLOR_BATTERY_DISCONNECTED_FILL),
+            LV_PART_INDICATOR);
+        lv_obj_remove_style(arc, NULL, LV_PART_KNOB);
+
+        peripheral_label_boxes[i] = lv_obj_create(arc);
+        lv_obj_t *label_box = peripheral_label_boxes[i];
+        lv_obj_clear_flag(label_box, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_size(label_box, 25, 25);
+        lv_obj_set_pos(label_box, 0, 0);
+        lv_obj_set_style_bg_color(
+            label_box, lv_color_hex(DISPLAY_COLOR_BATTERY_DISCONNECTED_FILL),
+            LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(label_box, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_radius(label_box, 2, LV_PART_MAIN);
+        lv_obj_set_style_border_width(label_box, 0, LV_PART_MAIN);
+        lv_obj_set_style_pad_all(label_box, 0, LV_PART_MAIN);
+
+        peripheral_labels[i] = lv_label_create(label_box);
+        lv_label_set_text(peripheral_labels[i], "-");
+        lv_obj_set_style_text_font(peripheral_labels[i], &DINish_Medium_24,
+                                   LV_PART_MAIN);
+        lv_obj_set_style_text_letter_space(peripheral_labels[i], -1, LV_PART_MAIN);
+        lv_obj_set_style_text_color(peripheral_labels[i], lv_color_black(),
+                                    LV_PART_MAIN);
+        lv_obj_align(peripheral_labels[i], LV_ALIGN_CENTER, 0, 0);
+    }
+
+    dongle_battery_init();
+    dongle_connection_init();
+    return 0;
+}
+
+/* ─────────────────────────── USB/BLE output ─────────────────────────── */
+
+struct output_state {
+    enum zmk_transport transport;
+    uint8_t profile_index;
+};
+
+static void set_toggle_btn_state(lv_obj_t *button, bool active, bool is_usb) {
+    lv_obj_t *label = lv_obj_get_child(button, 0);
+    uint32_t active_bg = is_usb ? DISPLAY_COLOR_USB_ACTIVE_BG
+                                : DISPLAY_COLOR_BLE_ACTIVE_BG;
+    uint32_t inactive_bg = is_usb ? DISPLAY_COLOR_USB_INACTIVE_BG
+                                  : DISPLAY_COLOR_BLE_INACTIVE_BG;
+
+    if (active) {
+        lv_obj_set_style_bg_color(button, lv_color_hex(active_bg), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(button, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_border_width(button, 0, LV_PART_MAIN);
+        if (label != NULL) {
+            lv_obj_set_style_text_color(label,
+                                        lv_color_hex(DISPLAY_COLOR_OUTPUT_ACTIVE_TEXT),
+                                        LV_PART_MAIN);
+        }
+    } else {
+        lv_obj_set_style_bg_opa(button, LV_OPA_TRANSP, LV_PART_MAIN);
+        lv_obj_set_style_border_width(button, 2, LV_PART_MAIN);
+        lv_obj_set_style_border_color(button, lv_color_hex(inactive_bg), LV_PART_MAIN);
+        if (label != NULL) {
+            lv_obj_set_style_text_color(label, lv_color_hex(inactive_bg),
+                                        LV_PART_MAIN);
+        }
+    }
+}
+
+static void output_update_cb(struct output_state state) {
+    struct zmk_widget_output *widget;
+    SYS_SLIST_FOR_EACH_CONTAINER(&output_widgets, widget, node) {
+        bool is_usb = state.transport == ZMK_TRANSPORT_USB;
+        set_toggle_btn_state(widget->usb_btn, is_usb, true);
+        set_toggle_btn_state(widget->ble_btn, !is_usb, false);
+
+        for (int i = 0; i < ZMK_BLE_PROFILE_COUNT; i++) {
+            lv_obj_set_style_bg_color(
+                widget->slots[i],
+                lv_color_hex(i == state.profile_index ? DISPLAY_COLOR_SLOT_ACTIVE_BG
+                                                       : DISPLAY_COLOR_SLOT_INACTIVE_BG),
+                LV_PART_MAIN);
+        }
+    }
+}
+
+static struct output_state output_get_state(const zmk_event_t *eh) {
+    ARG_UNUSED(eh);
+    struct zmk_endpoint_instance selected = zmk_endpoint_get_selected();
+    return (struct output_state){
+        .transport = selected.transport,
+        .profile_index = (uint8_t)zmk_ble_active_profile_index(),
+    };
+}
+
+ZMK_DISPLAY_WIDGET_LISTENER(dongle_output_endpoint, struct output_state,
+                            output_update_cb, output_get_state)
+ZMK_SUBSCRIPTION(dongle_output_endpoint, zmk_endpoint_changed)
+
+ZMK_DISPLAY_WIDGET_LISTENER(dongle_output_profile, struct output_state,
+                            output_update_cb, output_get_state)
+ZMK_SUBSCRIPTION(dongle_output_profile, zmk_ble_active_profile_changed)
+
+static lv_obj_t *create_toggle_button(lv_obj_t *parent, const char *text, int x) {
+    lv_obj_t *button = lv_obj_create(parent);
+    lv_obj_clear_flag(button, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_size(button, 56, 29);
+    lv_obj_set_pos(button, x, 0);
+    lv_obj_set_style_radius(button, 6, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(button, 0, LV_PART_MAIN);
+
+    lv_obj_t *label = lv_label_create(button);
+    lv_label_set_text(label, text);
+    lv_obj_set_style_text_font(label, &FG_Medium_20, LV_PART_MAIN);
+    lv_obj_center(label);
+    lv_obj_set_style_translate_y(label, 1, LV_PART_MAIN);
+    return button;
+}
+
+static lv_obj_t *create_profile_button(lv_obj_t *parent, int index, int x,
+                                       int width) {
+    lv_obj_t *button = lv_obj_create(parent);
+    lv_obj_clear_flag(button, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_size(button, width, 29);
+    lv_obj_set_pos(button, x, 33);
+    lv_obj_set_style_radius(button, 6, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(button, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(button, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(button, 0, LV_PART_MAIN);
+
+    lv_obj_t *label = lv_label_create(button);
+    char text[3];
+    snprintf(text, sizeof(text), "%d", index + 1);
+    lv_label_set_text(label, text);
+    lv_obj_set_style_text_font(label, &FG_Medium_20, LV_PART_MAIN);
+    lv_obj_set_style_text_color(label, lv_color_black(), LV_PART_MAIN);
+    lv_obj_center(label);
+    lv_obj_set_style_translate_y(label, 1, LV_PART_MAIN);
+    return button;
+}
+
+int zmk_widget_output_init(struct zmk_widget_output *widget, lv_obj_t *parent) {
+    widget->obj = lv_obj_create(parent);
+    lv_obj_clear_flag(widget->obj, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_size(widget->obj, 116, 62);
+    lv_obj_set_style_bg_opa(widget->obj, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(widget->obj, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(widget->obj, 0, LV_PART_MAIN);
+
+    widget->usb_btn = create_toggle_button(widget->obj, "USB", 0);
+    widget->ble_btn = create_toggle_button(widget->obj, "BLE", 58);
+
+    int slot_spacing = 2;
+    int slot_width = (116 - (ZMK_BLE_PROFILE_COUNT - 1) * slot_spacing) /
+                     ZMK_BLE_PROFILE_COUNT;
+    for (int i = 0; i < ZMK_BLE_PROFILE_COUNT; i++) {
+        int x = i * (slot_width + slot_spacing);
+        widget->slots[i] = create_profile_button(widget->obj, i, x, slot_width);
+    }
+
+    sys_slist_append(&output_widgets, &widget->node);
+    dongle_output_endpoint_init();
+    dongle_output_profile_init();
+    return 0;
+}
+
+/* ───────────────────────────── Screen assembly ─────────────────────── */
+
+lv_obj_t *zmk_display_status_screen(void) {
+    static struct zmk_widget_modifier_indicator modifier_widget;
+    static struct zmk_widget_wpm_meter wpm_widget;
+    static struct layer_dots_widget layer_dots_widget;
+    static struct zmk_widget_battery_circles battery_widget;
+    static struct zmk_widget_output output_widget;
+
+    lv_obj_t *screen = lv_obj_create(NULL);
+    lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_color(screen, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, LV_PART_MAIN);
+
+    zmk_widget_modifier_indicator_init(&modifier_widget, screen);
+    lv_obj_set_pos(modifier_widget.obj, 25, 8);
+
+    zmk_widget_wpm_meter_init(&wpm_widget, screen);
+    lv_obj_set_pos(wpm_widget.obj, 10, 42);
+
+    zmk_widget_layer_dots_init(&layer_dots_widget, screen);
+    lv_obj_set_pos(layer_dots_widget.obj, 10, 142);
+
+    zmk_widget_battery_circles_init(&battery_widget, screen);
+    lv_obj_set_pos(battery_widget.obj, 11, 170);
+
+    zmk_widget_output_init(&output_widget, screen);
+    lv_obj_set_pos(output_widget.obj, 148, 170);
+
+    return screen;
+}

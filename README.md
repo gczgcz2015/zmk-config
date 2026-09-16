@@ -22,7 +22,7 @@ six rows and seven columns.
 - left/right column pins: `D2 D3 D4 D5 D6 D7 D9`
 - shared row pins: `D14 D15 D18 D19 D20 D21`
 - left side is the split central
-- only one host Bluetooth profile is configured on the central side
+- the display dongle has two split-peripheral slots and four host Bluetooth profiles
 - idle timeout is 30 seconds and deep sleep timeout is 1 hour
 
 If your actual matrix wiring differs, update the `row-gpios` and `col-gpios`
@@ -31,9 +31,10 @@ definitions in the shield overlay files.
 ## Dongle mode
 
 The XIAO dongle is the split central and directly owns the 1.69-inch ST7789
-display setup. The status screen is local to this config and draws the battery
-bars, layer status, modifier indicators, and Bongo Cat-style LVGL bitmap
-animation without depending on the external Prospector module.
+display setup. The status screen is a local Operator-style LVGL port: it shows
+the modifier row, WPM meter, active layer, layer indicators, split battery
+rings, USB/BLE output, and BLE profile slots. This hardware variant has no
+touch controller and no ambient-light sensor; brightness remains fixed.
 
 To use dongle mode, flash:
 

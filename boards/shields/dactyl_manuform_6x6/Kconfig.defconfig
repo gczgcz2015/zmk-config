@@ -26,10 +26,12 @@ config ZMK_SPLIT_ROLE_CENTRAL
     default y
 
 config BT_MAX_CONN
-    default 3
+    # Two split peripherals plus four host profiles, matching the
+    # reference Operator screen's four profile slots.
+    default 6
 
 config BT_MAX_PAIRED
-    default 3
+    default 6
 
 config ZMK_SPLIT_BLE_CENTRAL_PERIPHERALS
     default 2
@@ -47,8 +49,12 @@ endchoice
 config ZMK_DISPLAY_STATUS_SCREEN_CUSTOM
     select LV_USE_LABEL
     select LV_USE_BAR
+    select LV_USE_ARC
     select LV_USE_FLEX
     select LV_COLOR_SCREEN_TRANSP
+
+config ZMK_WPM
+    default y
 
 choice ZMK_DISPLAY_WORK_QUEUE
     default ZMK_DISPLAY_WORK_QUEUE_DEDICATED
@@ -62,10 +68,10 @@ choice ST7789V_PIXEL_FORMAT
 endchoice
 
 config LV_Z_VDB_SIZE
-    default 100
+    default 25
 
 config LV_Z_MEM_POOL_SIZE
-    default 10000
+    default 20000
 
 config LV_DPI_DEF
     default 261

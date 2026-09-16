@@ -7,12 +7,12 @@ if(CONFIG_SHIELD_DACTYL_MANUFORM_6X6_DONGLE)
   zephyr_library_include_directories(${ZEPHYR_CURRENT_MODULE_DIR}/include)
   zephyr_library_include_directories(${ZEPHYR_CURRENT_CMAKE_DIR}/include)
   zephyr_library_sources(
-    src/bongo_cat_art.c
     src/dongle_display_brightness.c
     src/dongle_display_rotate.c
     src/dongle_display_screen.c
-    src/fonts/silkscreen_bold_16.c
-    src/fonts/silkscreen_regular_14.c
-    src/fonts/silkscreen_regular_16.c
+    src/fonts/DINish_Expanded_Light_36.c
+    src/fonts/DINish_Medium_24.c
+    src/fonts/FG_Medium_20.c
+    src/fonts/FR_Medium_32.c
   )
 endif()
