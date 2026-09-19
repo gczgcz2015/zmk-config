@@ -8,7 +8,7 @@ It currently builds:
 - a normal `dactyl_manuform_6x6_left` central firmware target for the left half
 - a dongle-mode `dactyl_manuform_6x6_left_peripheral` firmware target for the left half
 - a real `dactyl_manuform_6x6_right` firmware target for the right half
-- a display dongle `dactyl_manuform_6x6_dongle` target for a Seeed Studio XIAO nRF52840
+- a display dongle `dactyl_manuform_6x6_dongle` target for a Pro Micro-compatible nRF52840 board
 - a safe `settings_reset` firmware image for clearing persistent settings
 
 ## Current Dactyl assumptions
@@ -30,7 +30,7 @@ definitions in the shield overlay files.
 
 ## Dongle mode
 
-The XIAO dongle is the split central and directly owns the 1.69-inch ST7789
+The Pro Micro-compatible nRF52840 dongle is the split central and directly owns the 1.69-inch ST7789
 display setup. The status screen is a local Operator-style LVGL port: it shows
 the modifier row, WPM meter, active layer, layer indicators, split battery
 rings, USB/BLE output, and BLE profile slots. This hardware variant has no
@@ -38,13 +38,31 @@ touch controller and no ambient-light sensor; brightness remains fixed.
 
 To use dongle mode, flash:
 
-- `dactyl-manuform-6x6-display-dongle.uf2` to the XIAO nRF52840 dongle
+- `dactyl-manuform-6x6-display-dongle.uf2` to the Pro Micro nRF52840 dongle
 - `dactyl-manuform-6x6-left-peripheral.uf2` to the left half
 - `dactyl-manuform-6x6-right.uf2` to the right half
 
 Pair the left half to the dongle first, then the right half. To return to the
 original no-dongle setup, flash `dactyl-manuform-6x6-left.uf2` back to the left
 half and pair the host with the left half again.
+
+### Display wiring
+
+| Display pin | Pro Micro nRF52840 pin |
+| --- | --- |
+| `VCC` | `3.3V` |
+| `GND` | `GND` |
+| `SCL` / `SCK` | `D15` / `P1.13` |
+| `SDA` / `MOSI` | `D18` / `P1.15` |
+| `CS` | `D10` / `P0.09` |
+| `DC` / `A0` | `D7` / `P0.11` |
+| `RES` / `RST` | `D3` / `P0.20` |
+| `BL` / `BLK` | `D14` / `P1.11` |
+| `SDO` / `MISO` | `D16` / `P0.10`, optional |
+
+The display `SDA` pin is SPI MOSI here, not the I2C SDA signal. This hardware
+variant has no touch controller or ambient-light sensor, so those pins remain
+unconnected.
 
 ## Wiring
 
